@@ -1,0 +1,7 @@
+numpy
+requests
+matplotlib
+num2words
+sympy
+diophantine
+alphabet-detector
