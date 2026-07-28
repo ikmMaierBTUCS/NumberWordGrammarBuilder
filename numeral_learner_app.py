@@ -2,7 +2,7 @@ import matplotlib
 matplotlib.use('Agg')
 
 import tkinter as tk
-from tkinter import simpledialog, messagebox, scrolledtext
+from tkinter import simpledialog, messagebox, scrolledtext, filedialog
 import threading
 import queue
 import sys
@@ -19,6 +19,7 @@ from funktionen_mit_referenzen import (
     Oracle, learn_lexicon, grammar_generate, grammar_parse, explain_generate,
     StopLearning, UndoLearning, Vocabulary
 )
+import grammatik_ausgabe
 
 # ── thread-safe communication ───────────────────────────────────────────────
 _input_queue   = queue.Queue()   # GUI  →  algorithm  : "ZAHL WORT" | "STOP" | "UNDO"
@@ -155,6 +156,7 @@ class ZahlwortGUI:
         self._user_submitted = set()  # numbers directly entered/confirmed by the operator
         self._abstract      = set()   # numbers reachable only via abstraction
         self._words         = {}      # number -> last displayed word
+        self._korrektur_schutz = set()  # numbers kept in _user_submitted during an active correction+replay
 
         self._build_ui()
         self._check_cycle()     # start periodic update loop
@@ -370,6 +372,9 @@ class ZahlwortGUI:
     # ── periodic update ──────────────────────────────────────────────────────
     def _check_cycle(self):
         waiting = _waiting_event.is_set()
+        if waiting and self._korrektur_schutz:
+            # Korrektur+Replay ist abgeschlossen -- normaler UNDO-Betrieb ab jetzt.
+            self._korrektur_schutz = set()
         if waiting:
             self._status_var.set("⏸ Algorithmus wartet — Zahl anklicken, um Wort einzugeben")
             self.root.configure(bg=COLOR_WAITING)
@@ -412,9 +417,10 @@ class ZahlwortGUI:
                 if changed:
                     self._words[n] = new_word
                 if user_confirmed:
-                    # directly entered by operator → dark green, locked
+                    # directly entered by operator → dark green; still clickable so it
+                    # can be corrected (via _on_click's warning-gated correction flow)
                     if changed:
-                        self._set_cell_style(n, COLOR_KNOWN, new_word, clickable=False)
+                        self._set_cell_style(n, COLOR_KNOWN, new_word, clickable=True)
                 else:
                     # confirmed by algorithm (forced) → light green, still clickable
                     if changed or (was_confirmed and self._words.get(n) == new_word):
@@ -437,7 +443,8 @@ class ZahlwortGUI:
                     if n in self._abstract or n in self._confirmed:
                         self._abstract.discard(n)
                         self._confirmed.discard(n)
-                        self._user_submitted.discard(n)  # allow re-entry
+                        if n not in self._korrektur_schutz:
+                            self._user_submitted.discard(n)  # allow re-entry
                         self._words.pop(n, None)
                         color = COLOR_PENDING if n in self._pending else COLOR_UNKNOWN
                         self._set_cell_style(n, color, '', clickable=True)
@@ -453,15 +460,29 @@ class ZahlwortGUI:
                                 parent=self.root)
             return
 
-        # dark-green (user-confirmed) cells are permanently locked
-        if number in self._user_submitted and number in self._confirmed:
-            return
+        # dark-green (user-confirmed) cells können korrigiert werden, aber das
+        # schreibt die Lernhistorie um: Warnung, bevor der Dialog aufgeht.
+        is_locked_confirmed = number in self._user_submitted and number in self._confirmed
+        if is_locked_confirmed:
+            if not messagebox.askyesno(
+                "Bestätigtes Zahlwort korrigieren",
+                f"Das Zahlwort für {number} ist bereits bestätigt "
+                f"(\"{self._words.get(number, '')}\").\n\n"
+                "Eine nachträgliche Korrektur wird starke Änderungen in der Tabelle "
+                "verursachen: der Lernverlauf wird auf den Zeitpunkt dieser Eingabe "
+                "zurückgesetzt, und alle seither gelernten Zahlwörter werden "
+                "automatisch neu eingegeben und verarbeitet.\n\nTrotzdem fortfahren?",
+                icon='warning', parent=self.root,
+            ):
+                return
 
-        # Pre-fill with current word for abstract or forced-confirmed cells
+        # Pre-fill with current word for abstract, forced-confirmed, or confirmed cells
         is_forced   = number in self._confirmed and number not in self._user_submitted
         is_abstract = number in self._abstract
-        prefill = self._words.get(number, '') if (is_abstract or is_forced) else ''
-        if is_forced:
+        prefill = self._words.get(number, '') if (is_abstract or is_forced or is_locked_confirmed) else ''
+        if is_locked_confirmed:
+            prompt = f"Bestätigtes Zahlwort für {number} korrigieren:"
+        elif is_forced:
             prompt = f"Zahlwort für {number} korrigieren (zwangsbestätigt):"
         elif is_abstract:
             prompt = f"Zahlwort für {number} bestätigen oder korrigieren:"
@@ -480,6 +501,13 @@ class ZahlwortGUI:
             messagebox.showwarning("Hinweis", "Bitte ein Wort eingeben.", parent=self.root)
             return
 
+        if is_locked_confirmed:
+            self._submit_correction(number, wort)
+        else:
+            self._submit_word(number, wort)
+
+    def _submit_word(self, number, wort):
+        """Reicht (number, wort) als frische Eingabe ein."""
         self._abstract.discard(number)
         self._confirmed.discard(number)   # allow re-learning if forced-confirmed
         self._user_submitted.add(number)
@@ -491,6 +519,22 @@ class ZahlwortGUI:
             self._lock_oracle_toggle()
             _start_event.set()  # unblock thread so it can create the Oracle
         _input_queue.put(f"{number} {wort}")
+
+    def _submit_correction(self, number, wort):
+        """Korrigiert ein bereits bestätigtes Zahlwort. Der Algorithmus setzt den
+        Lernverlauf intern auf den Zeitpunkt der ursprünglichen Eingabe von
+        `number` zurück, ersetzt das Wort und verarbeitet danach alle seither
+        gelernten Zahlwörter automatisch neu (mit 1s Pause je Wort)."""
+        self._abstract.discard(number)
+        self._confirmed.discard(number)
+        self._pending_words[number] = wort
+        self._set_cell_style(number, COLOR_PENDING, wort)
+        self._pending.add(number)
+        # Verhindert, dass _check_cycle die betroffenen Zahlen während des
+        # automatischen Replays aus _user_submitted wirft (sie blieben ja direkt
+        # bestätigt -- nur eben automatisch statt per Klick erneut eingereicht).
+        self._korrektur_schutz = set(self._user_submitted)
+        _input_queue.put(f"CORRECT {number} {wort}")
 
     def _send_stop(self):
         if messagebox.askyesno("STOP", "Lernen wirklich beenden?", parent=self.root):
@@ -514,6 +558,20 @@ class ZahlwortGUI:
                   command=self._show_learn_page).pack(side=tk.LEFT, padx=4)
         tk.Label(top, text="Grammatik testen", font=('Arial', 14, 'bold'),
                  fg='#1a4a8a').pack(side=tk.LEFT, padx=12)
+
+        self._mg_button = tk.Button(top, text="MG ausgeben", bg='#6a4ea0', fg='white',
+                                    command=self._export_mg)
+        self._mg_button.pack(side=tk.RIGHT, padx=4)
+        self._cfg_button = tk.Button(top, text="CFG ausgeben", bg='#6a4ea0', fg='white',
+                                     command=self._export_cfg)
+        self._cfg_button.pack(side=tk.RIGHT, padx=4)
+        _Tooltip(self._cfg_button,
+                 "Schreibt die gelernte Grammatik als NLTK-Feature-Grammatik (.fcfg).\n"
+                 "Das SEM-Merkmal traegt den arithmetischen Wert, den NLTK\n"
+                 "kompositional aufbaut.")
+        _Tooltip(self._mg_button,
+                 "Schreibt die gelernte Grammatik als minimalistische Grammatik (MG)\n"
+                 "mit Merkmalen und Semantik.")
 
         inp = tk.Frame(page)
         inp.pack(fill=tk.X, padx=10, pady=(10, 4))
@@ -544,6 +602,87 @@ class ZahlwortGUI:
         self._test_canvas.bind(
             '<Configure>',
             lambda e: self._test_last_tree and self._draw_tree(self._test_last_tree))
+
+    # ── Grammatik-Ausgabe ────────────────────────────────────────────────────
+    def _export_cfg(self):
+        self._export_grammatik('cfg')
+
+    def _export_mg(self):
+        self._export_grammatik('mg')
+
+    def _export_grammatik(self, art):
+        """Schreibt die gelernte Grammatik als CFG (.fcfg) bzw. MG in eine Datei.
+
+        Die Konversion laeuft in einem Arbeitsthread: cfg2mg sucht ueber
+        find_best_antichain kombinatorisch nach einer Antikette und kann bei
+        grossen Lexika spuerbar dauern -- im Hauptthread wuerde das Fenster
+        derweil einfrieren.
+        """
+        lex = getattr(fmr, 'kenntnis_lexikon', {})
+        if not lex:
+            messagebox.showinfo("Grammatik ausgeben",
+                                "Es wurden noch keine Zahlwörter gelernt.",
+                                parent=self.root)
+            return
+
+        if art == 'cfg':
+            titel, endung, typen = ("CFG als NLTK-Feature-Grammatik speichern",
+                                    '.fcfg', [("NLTK-Feature-Grammatik", "*.fcfg"),
+                                              ("Alle Dateien", "*.*")])
+            vorschlag = 'zahlwort_grammatik.fcfg'
+        else:
+            titel, endung, typen = ("MG speichern", '.txt',
+                                    [("Textdatei", "*.txt"), ("Alle Dateien", "*.*")])
+            vorschlag = 'zahlwort_grammatik_mg.txt'
+
+        pfad = filedialog.asksaveasfilename(
+            title=titel, defaultextension=endung, filetypes=typen,
+            initialfile=vorschlag, parent=self.root)
+        if not pfad:
+            return
+
+        self._cfg_button.config(state=tk.DISABLED)
+        self._mg_button.config(state=tk.DISABLED)
+        self._test_result_var.set(">> Grammatik wird erzeugt …")
+
+        def arbeite():
+            try:
+                if art == 'cfg':
+                    text, anzahl = grammatik_ausgabe.erzeuge_cfg(
+                        lex, dateiname=os.path.basename(pfad))
+                    einheit = 'Regeln'
+                else:
+                    text, anzahl = grammatik_ausgabe.erzeuge_mg(lex)
+                    einheit = 'Items'
+                with open(pfad, 'w', encoding='utf-8') as f:
+                    f.write(text)
+                self.root.after(0, fertig, None, anzahl, einheit)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                # scflist2cfg wirft bei 'Too many NTs required' bewusst eine
+                # nackte BaseException, daher nicht nur Exception abfangen.
+                self.root.after(0, fertig, exc, 0, '')
+
+        def fertig(fehler, anzahl, einheit):
+            self._cfg_button.config(state=tk.NORMAL)
+            self._mg_button.config(state=tk.NORMAL)
+            if fehler is not None:
+                self._test_result_var.set(">> Grammatik-Ausgabe fehlgeschlagen")
+                messagebox.showerror(
+                    "Grammatik ausgeben",
+                    f"Die Grammatik konnte nicht erzeugt werden:\n\n"
+                    f"{type(fehler).__name__}: {fehler}",
+                    parent=self.root)
+                return
+            self._test_result_var.set(
+                f">> {anzahl} {einheit} nach {os.path.basename(pfad)} geschrieben")
+            messagebox.showinfo(
+                "Grammatik ausgeben",
+                f"{anzahl} {einheit} geschrieben nach:\n{pfad}",
+                parent=self.root)
+
+        threading.Thread(target=arbeite, daemon=True).start()
 
     def _show_test_page(self):
         self._learn_page.pack_forget()

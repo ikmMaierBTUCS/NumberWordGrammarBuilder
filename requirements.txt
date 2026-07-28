@@ -5,3 +5,4 @@ num2words
 sympy
 diophantine
 alphabet-detector
+nltk

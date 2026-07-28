@@ -12,6 +12,7 @@ import types
 import matplotlib.pyplot as plt
 import random
 import os
+import time
 
 import unicodedata
 
@@ -23,6 +24,7 @@ class UndoLearning(Exception):
 
 # Replaceable input function for hybrid2 mode (set by GUI)
 _hybrid2_input_func = None
+
 
 class Highlight:
     def __init__(self, voc, start):
@@ -81,6 +83,22 @@ def to_key(eingabe, kenntnis_lexikon=None, fallback=True):
     else:
         raise TypeError("Input has to be a Vocabulary or an SCFunction")
     
+def begrenze_werte(werte, size):
+    '''Hoechstens size Werte, gleichmaessig ueber den Wertebereich gespreizt.
+
+    Deterministisch: bei gleicher Eingabemenge kommt immer dieselbe Auswahl
+    heraus. Eine zufaellige Stichprobe wuerde Vergleiche von Lauf zu Lauf
+    unterschiedlich ausfallen lassen.
+    '''
+    if size is None or len(werte) <= size:
+        return set(werte)
+    sortiert = sorted(werte)
+    n = len(sortiert)
+    if size <= 1:
+        return {sortiert[0]}
+    return {sortiert[(i * (n - 1)) // (size - 1)] for i in range(size)}
+
+
 class SCFunction:
     '''
     Root is the exponent of the function where _ mark input slots
@@ -246,13 +264,27 @@ class SCFunction:
         '''
         return self.root.count('_')
     def number_inputs(self, only_confirmed = False):
+        '''Je Komponente die Zahlwerte, die ihre Eingabefunktionen erzeugen koennen.
+
+        Wieviele Werte je Eingabefunktion einfliessen, legt sample_output_numbers
+        fest (dort der Parameter size). Ueber die Eingabefunktionen einer
+        Komponente wird nur vereinigt, nicht nochmals beschnitten.
+
+        Frueher lieferte diese Methode ueber sample() genau EINEN Wert je
+        Eingabefunktion. Damit blieb der groesste Teil des Wertebereichs
+        unsichtbar und solve_lexicon_clashes uebersah Konflikte (z.B.
+        _undsiebzig gegen einhundert_ im Bereich 117-125).
+        '''
         ni = []
         if only_confirmed:
             ir = self.confirmed_inputrange
         else:
             ir = self.inputrange
         for comp in ir:
-            ni += [[to_scf(entr).sample().mapping[-1] for entr in comp]]
+            werte = set()
+            for entr in comp:
+                werte |= to_scf(entr).sample_output_numbers(only_confirmed=only_confirmed)
+            ni += [sorted(werte)]
         return ni
     def input_numberbase(self):
         build_base=[]
@@ -537,6 +569,58 @@ class SCFunction:
             result.add(round(val))
         return result
 
+    def sample_output_numbers(self, size=5, only_confirmed=False, ignore_keys=None, _depth=0):
+        '''Wie all_output_numbers, aber jede EIGENE Komponente auf hoechstens size
+        Werte begrenzt. Anders als sample_outputs werden keine SCFunction-Objekte
+        gebaut, es geht nur um die Zahlen.
+
+        size=5 ist die Vergleichsgrundlage von solve_lexicon_clashes (ueber
+        number_inputs): zu wenige Werte, und Konflikte zwischen zwei Funktionen
+        bleiben unentdeckt. size=None hebt die Begrenzung auf.
+
+        Die Begrenzung greift je Komponente, das Ergebnis selbst wird NICHT
+        beschnitten: eine zweistellige Funktion liefert also bis zu size*size
+        Werte (weniger, wenn eine Komponente weniger Eingaben zulaesst).
+        Genau so entsteht die Abdeckung, auf die es beim Konfliktvergleich
+        ankommt -- ein Deckel auf dem Endergebnis wuerde sie wieder zunichte
+        machen.
+
+        Die Auswahl ist deterministisch (gleichmaessige Spreizung ueber die
+        sortierten Werte). Das ist hier wesentlich: sample() zieht ueber comp[0]
+        aus einer Menge und haengt damit an der Hash-Reihenfolge, was Vergleiche
+        von Lauf zu Lauf unterschiedlich ausfallen laesst.
+        '''
+        if _depth > 30:
+            return set()
+        if self.dimension() == 0:
+            return {round(self.mapping[-1])}
+        ir = self.confirmed_inputrange if only_confirmed else self.inputrange
+        if ignore_keys is None:
+            ignore_keys = frozenset()
+        lex = self.kenntnis_lexikon
+        my_ignore = ignore_keys | {self.key}
+        comp_values = []
+        for comp in ir:
+            vals = set()
+            for f in comp:
+                f_scf = to_scf(f, kenntnis_lexikon=lex)
+                f_key = f_scf.key
+                dict_key = f if isinstance(f, str) else f_key
+                if f_key in my_ignore or dict_key in my_ignore:
+                    continue
+                vals |= f_scf.sample_output_numbers(size, only_confirmed,
+                                                    my_ignore | {f_key, dict_key}, _depth + 1)
+            if not vals:
+                return set()
+            comp_values.append(begrenze_werte(vals, size))
+        result = set()
+        for combo in itertools.product(*comp_values):
+            val = self.mapping[-1]
+            for i in range(len(combo)):
+                val += self.mapping[i] * combo[i]
+            result.add(round(val))
+        return result
+
     def vereinige(self,mergee, other_mergees = [], printb= True,trust_affinity=True):
         # self = G_0
         # mergee = F^*
@@ -632,10 +716,13 @@ class SCFunction:
          
     
     def present(self, domain=True, printout=True, only_confirmed = False):
+        # Die mappings tragen Float-Rauschen aus der linearen Algebra
+        # (0.9999999999999998 statt 1). In der Anzeige wird durchgaengig auf
+        # ganze Zahlen gerundet; self.mapping selbst bleibt unberuehrt.
         if self.dimension() == 0:
-            if printout: 
-                print(self.root+" = "+str(self.mapping[-1]))
-            return self.root+" = "+str(self.mapping[-1])
+            if printout:
+                print(self.root+" = "+str(round(self.mapping[-1])))
+            return self.root+" = "+str(round(self.mapping[-1]))
         else:
             domainstrs = []
             if only_confirmed:
@@ -647,19 +734,19 @@ class SCFunction:
                 if len(comp) < 20:
                     for entry in comp:
                         if to_scf(entry).dimension() == 0:
-                            component += str(to_scf(entry).mapping[-1])+','
+                            component += str(round(to_scf(entry).mapping[-1]))+','
                         else:
                             component += str(to_scf(entry).root)+','
                 else:
                     for entry in comp[:10]:
                         if to_scf(entry).dimension() == 0:
-                            component += str(to_scf(entry).mapping[-1])+','
+                            component += str(round(to_scf(entry).mapping[-1]))+','
                         else:
                             component += str(to_scf(entry).root)+','
                     component += '...,'
                     for entry in comp[-10:]:
                         if to_scf(entry).dimension() == 0:
-                            component += str(to_scf(entry).mapping[-1])+','
+                            component += str(round(to_scf(entry).mapping[-1]))+','
                         else:
                             component += str(to_scf(entry).root)+','
                 component = component[:-1]+'}'
@@ -667,17 +754,17 @@ class SCFunction:
             domainstr = 'x'.join(domainstrs)
             if self.dimension() == 1:
                 inpstr = 'x'
-                outpstr = str(round(self.mapping[0],2)) + 'x+' + str(round(self.mapping[1],2))
+                outpstr = str(round(self.mapping[0])) + 'x+' + str(round(self.mapping[1]))
             else:
                 variables = ['x','y','z','a','b','c','d','e','f','g','h']
                 inpstr = '('
                 outpstr = ''
                 for comp in range(self.dimension()):
                     inpstr += variables[comp]+','
-                    outpstr += str(round(self.mapping[comp],2)) + variables[comp] + '+'
+                    outpstr += str(round(self.mapping[comp])) + variables[comp] + '+'
                 inpstr = inpstr[:-1] + ')'
-                if self.mapping[-1] != 0:
-                    outpstr += str(round(self.mapping[-1],2))
+                if round(self.mapping[-1]) != 0:
+                    outpstr += str(round(self.mapping[-1]))
                 else:
                     outpstr = outpstr[:-1]
             if domain:
@@ -1649,32 +1736,194 @@ def grammar_parse(word,kenntnis_lexikon,only_confirmed=False):
             return round(result)
     return -1
 
-def _find_gen_combo(target, rootparts, inputrange, mapping, comp_idx, accumulated, word_so_far, suffix_min, suffix_max, only_confirmed=False):
+# ── Erzeugungsreihenfolge ────────────────────────────────────────────────────
+#
+# Kann eine Zahl von mehreren Funktionen erzeugt werden, entscheidet:
+#   1. bestätigt vor erweitert (eine nur durch Abstraktion erreichbare Ausgabe
+#      verliert immer gegen eine bestätigte),
+#   2. kleinere Dimension vor größerer,
+#   3. root, dann Lexikon-Key -- nur damit die Wahl reproduzierbar ist.
+# Dieselbe Reihenfolge gilt rekursiv für die Belegung der Eingabeslots: ein Slot
+# wird bevorzugt aus der niedrigstdimensionalen Eingabefunktion gefüllt.
+#
+# Die Reihenfolge allein genügt nicht -- solve_lexicon_clashes garantiert NICHT,
+# dass die erweiterten Erzeugnisse zweier Funktionen disjunkt sind (siehe dort).
+# Deshalb muss die Wahl hier deterministisch getroffen werden.
+
+_GEN_CACHE = None
+
+
+def _lexikon_signatur(kenntnis_lexikon):
+    if isinstance(kenntnis_lexikon, dict):
+        return (id(kenntnis_lexikon), tuple(kenntnis_lexikon.keys()),
+                tuple(map(id, kenntnis_lexikon.values())))
+    return (id(kenntnis_lexikon), None, tuple(map(id, kenntnis_lexikon)))
+
+
+def _gen_cache(kenntnis_lexikon):
+    """Cache mit dimensionssortierten Einträgen, Wort-Tabellen und Suchplänen.
+
+    Wird komplett verworfen, sobald sich das Lexikon ändert (anderes Dict-Objekt,
+    andere Keys oder ein Key zeigt auf ein anderes Funktionsobjekt). Der Cache
+    hält Referenzen auf alle erfassten Objekte, damit ihre id() eindeutig bleibt.
     """
-    Recursively search for an input combination that produces the target number.
-    Uses suffix min/max bounds for aggressive pruning.
+    global _GEN_CACHE
+    cache = _GEN_CACHE
+    signatur = _lexikon_signatur(kenntnis_lexikon)
+    if cache is not None and cache['signatur'] == signatur:
+        return cache
+
+    if isinstance(kenntnis_lexikon, dict):
+        items = list(kenntnis_lexikon.items())
+    else:
+        items = [(getattr(e, 'key', None) or e.root, e) for e in kenntnis_lexikon]
+
+    # Dasselbe Funktionsobjekt kann unter mehreren Keys stehen -- einmal zählen
+    # und einen kanonischen Key wählen.
+    gruppen = {}
+    for k, v in items:
+        gruppen.setdefault(id(v), (v, []))[1].append(k)
+    sortiert = []
+    for eintrag, keys in gruppen.values():
+        kanon = eintrag.key if getattr(eintrag, 'key', None) in keys else min(keys, key=str)
+        sortiert.append((kanon, eintrag))
+    sortiert.sort(key=lambda kv: (kv[1].dimension(), kv[1].root, str(kv[0])))
+
+    cache = {
+        'signatur': signatur,
+        'lexikon': kenntnis_lexikon,
+        'sortiert': sortiert,
+        'tabellen': {},
+        'plane': {},
+        'referenzen': [v for _, v in items],
+    }
+    _GEN_CACHE = cache
+    return cache
+
+
+def _wort_tabelle(scf, only_confirmed, cache):
+    """{Zahlwert: Wort} aller Ausgaben von scf, plus nach Wert sortierte Liste.
+
+    Erzeugt eine Funktion für denselben Wert mehrere Wörter, wird deterministisch
+    das kürzeste (bei Gleichstand alphabetisch erste) gewählt.
     """
-    if comp_idx == len(inputrange):
-        total = accumulated + mapping[-1]
-        if round(total) == round(target):
+    tkey = (id(scf), only_confirmed)
+    tabelle = cache['tabellen'].get(tkey)
+    if tabelle is None:
+        werte = {}
+        for wort, wert in _iter_entry_words(scf, only_confirmed=only_confirmed):
+            wert = round(wert)
+            bisher = werte.get(wert)
+            if bisher is None or (len(wort), wort) < (len(bisher), bisher):
+                werte[wert] = wort
+        tabelle = (werte, sorted(werte.items()))
+        cache['tabellen'][tkey] = tabelle
+        cache['referenzen'].append(scf)
+    return tabelle
+
+
+def _gen_plan(eintrag, only_confirmed, cache):
+    """Vorberechnete Suchstruktur eines Lexikoneintrags.
+
+    ('atom', wert, wort) bzw. ('komposit', rootparts, mapping, komponenten,
+    suffix_min, suffix_max). None, wenn der Eintrag nichts erzeugen kann.
+    Die Komponenten sind nach Dimension sortiert, die Schranken sind exakt (aus
+    den Wort-Tabellen) statt aus den beim Konstruieren gespeicherten Attributen.
+    """
+    pkey = (id(eintrag), only_confirmed)
+    if pkey in cache['plane']:
+        return cache['plane'][pkey]
+
+    plan = None
+    if eintrag.dimension() == 0:
+        plan = ('atom', round(eintrag.mapping[-1]), eintrag.root)
+    else:
+        ir = eintrag.confirmed_inputrange if only_confirmed else eintrag.inputrange
+        lexikon = cache['lexikon'] if isinstance(cache['lexikon'], dict) else None
+        komponenten = []
+        vollstaendig = True
+        for komp in ir:
+            aufgeloest = [to_scf(e, kenntnis_lexikon=lexikon) for e in komp]
+            aufgeloest.sort(key=lambda s: (s.dimension(), s.root))
+            tabellen = [t for t in (_wort_tabelle(s, only_confirmed, cache) for s in aufgeloest) if t[1]]
+            if not tabellen:
+                vollstaendig = False
+                break
+            komponenten.append(tabellen)
+        if vollstaendig:
+            dim = len(komponenten)
+            suffix_min = [0.0] * (dim + 1)
+            suffix_max = [0.0] * (dim + 1)
+            suffix_min[dim] = eintrag.mapping[-1]
+            suffix_max[dim] = eintrag.mapping[-1]
+            for j in range(dim - 1, -1, -1):
+                komp_lo = min(t[1][0][0] for t in komponenten[j])
+                komp_hi = max(t[1][-1][0] for t in komponenten[j])
+                koeff = eintrag.mapping[j]
+                if koeff >= 0:
+                    suffix_min[j] = suffix_min[j+1] + koeff * komp_lo
+                    suffix_max[j] = suffix_max[j+1] + koeff * komp_hi
+                else:
+                    suffix_min[j] = suffix_min[j+1] + koeff * komp_hi
+                    suffix_max[j] = suffix_max[j+1] + koeff * komp_lo
+            plan = ('komposit', eintrag.root.split('_'), eintrag.mapping,
+                    komponenten, suffix_min, suffix_max)
+
+    cache['plane'][pkey] = plan
+    cache['referenzen'].append(eintrag)
+    return plan
+
+
+def _kandidaten(sortierte_werte, koeff, untere, obere):
+    """Ausschnitt der Wertetabelle, der die Suffix-Schranken erfüllen kann."""
+    if koeff == 0:
+        return sortierte_werte
+    if koeff > 0:
+        lo, hi = untere / koeff, obere / koeff
+    else:
+        lo, hi = obere / koeff, untere / koeff
+    links = bisect.bisect_left(sortierte_werte, (lo - 1e-9,))
+    rechts = bisect.bisect_right(sortierte_werte, (hi + 1e-9,))
+    return sortierte_werte[links:rechts]
+
+
+def _find_gen_combo(target, plan, comp_idx, accumulated, word_so_far):
+    """Sucht eine Eingabekombination des Plans, die target erzeugt.
+
+    Komponenten werden in Dimensionsreihenfolge belegt; die letzte Komponente
+    wird direkt aus der Wertetabelle nachgeschlagen statt durchlaufen.
+    """
+    _, rootparts, mapping, komponenten, suffix_min, suffix_max = plan
+    if comp_idx == len(komponenten):
+        if round(accumulated + mapping[-1]) == round(target):
             return word_so_far + rootparts[-1]
         return None
-    for entry in inputrange[comp_idx]:
-        for (ew, ev) in _iter_entry_words(entry, only_confirmed=only_confirmed):
-            new_acc = accumulated + mapping[comp_idx] * ev
-            # Pruning: check if remaining components can still reach target
-            total_min = new_acc + suffix_min[comp_idx + 1]
-            total_max = new_acc + suffix_max[comp_idx + 1]
-            if target < total_min - 0.5 or target > total_max + 0.5:
+
+    koeff = mapping[comp_idx]
+    letzte = comp_idx == len(komponenten) - 1
+    obere = target + 0.5 - accumulated - suffix_min[comp_idx + 1]
+    untere = target - 0.5 - accumulated - suffix_max[comp_idx + 1]
+
+    for werte, sortierte_werte in komponenten[comp_idx]:
+        if letzte and koeff != 0:
+            # Der fehlende Wert steht fest -> ein Tabellenzugriff statt Schleife.
+            noetig = (target - mapping[-1] - accumulated) / koeff
+            gerundet = round(noetig)
+            if abs(noetig - gerundet) > 1e-6:
                 continue
-            result = _find_gen_combo(
-                target, rootparts, inputrange, mapping, comp_idx + 1,
-                new_acc, word_so_far + rootparts[comp_idx] + ew,
-                suffix_min, suffix_max, only_confirmed=only_confirmed
+            wort = werte.get(gerundet)
+            if wort is None or round(accumulated + koeff * gerundet + mapping[-1]) != round(target):
+                continue
+            return word_so_far + rootparts[comp_idx] + wort + rootparts[-1]
+        for wert, wort in _kandidaten(sortierte_werte, koeff, untere, obere):
+            ergebnis = _find_gen_combo(
+                target, plan, comp_idx + 1, accumulated + koeff * wert,
+                word_so_far + rootparts[comp_idx] + wort
             )
-            if result is not None:
-                return result
+            if ergebnis is not None:
+                return ergebnis
     return None
+
 
 def grammar_generate(number,kenntnis_lexikon,only_confirmed=False,_return_source=False):
     """
@@ -1682,44 +1931,28 @@ def grammar_generate(number,kenntnis_lexikon,only_confirmed=False,_return_source
     Optimized: uses recursive search with suffix min/max pruning instead of enumerating all outputs.
     If only_confirmed=True, only confirmed inputrange entries are used.
     If _return_source=True, returns (word, root_key) instead of just word.
+
+    Erzeugen mehrere Funktionen die Zahl, gewinnt die bestätigte Erzeugung vor der
+    erweiterten und danach die Funktion mit der kleineren Dimension.
     """
-    if isinstance(kenntnis_lexikon, dict):
-        lex_entries = list(kenntnis_lexikon.items())
-    else:
-        lex_entries = [(e.root, e) for e in kenntnis_lexikon]
-    lex_entries = sorted(lex_entries, key=lambda kv: kv[1].dimension())
-    for lex_key, lex_entry in lex_entries:
-        # Use confirmed bounds when only_confirmed is set
-        if only_confirmed:
-            if number < lex_entry.confirmed_minimum or number > lex_entry.confirmed_maximum:
+    cache = _gen_cache(kenntnis_lexikon)
+    # Erst alles Bestätigte, dann -- falls erlaubt -- das nur Erweiterte.
+    stufen = (True,) if only_confirmed else (True, False)
+    for stufe in stufen:
+        for lex_key, lex_entry in cache['sortiert']:
+            plan = _gen_plan(lex_entry, stufe, cache)
+            if plan is None:
                 continue
-        else:
-            if number < lex_entry.minimum or number > lex_entry.maximum:
+            if plan[0] == 'atom':
+                if plan[1] == round(number):
+                    return (plan[2], lex_key) if _return_source else plan[2]
                 continue
-        if lex_entry.dimension() == 0:
-            if round(lex_entry.mapping[-1]) == round(number):
-                return (lex_entry.root, lex_key) if _return_source else lex_entry.root
-            continue
-        ir = lex_entry.confirmed_inputrange if only_confirmed else lex_entry.inputrange
-        rootparts = lex_entry.root.split('_')
-        # Precompute suffix min/max for pruning
-        dim = len(ir)
-        suffix_min = [0.0] * (dim + 1)
-        suffix_max = [0.0] * (dim + 1)
-        suffix_min[dim] = lex_entry.mapping[-1]
-        suffix_max[dim] = lex_entry.mapping[-1]
-        for j in range(dim - 1, -1, -1):
-            comp_lo = min(to_scf(e).minimum for e in ir[j])
-            comp_hi = max(to_scf(e).maximum for e in ir[j])
-            if lex_entry.mapping[j] >= 0:
-                suffix_min[j] = suffix_min[j+1] + lex_entry.mapping[j] * comp_lo
-                suffix_max[j] = suffix_max[j+1] + lex_entry.mapping[j] * comp_hi
-            else:
-                suffix_min[j] = suffix_min[j+1] + lex_entry.mapping[j] * comp_hi
-                suffix_max[j] = suffix_max[j+1] + lex_entry.mapping[j] * comp_lo
-        result = _find_gen_combo(number, rootparts, ir, lex_entry.mapping, 0, 0.0, '', suffix_min, suffix_max, only_confirmed=only_confirmed)
-        if result is not None:
-            return (result, lex_key) if _return_source else result
+            suffix_min, suffix_max = plan[4], plan[5]
+            if number < suffix_min[0] - 0.5 or number > suffix_max[0] + 0.5:
+                continue
+            result = _find_gen_combo(number, plan, 0, 0.0, '')
+            if result is not None:
+                return (result, lex_key) if _return_source else result
     return ('', None) if _return_source else ''
 
 
@@ -1739,51 +1972,33 @@ def explain_generate(number, kenntnis_lexikon, _depth=0, _seen=None):
         return None
     if _seen is None:
         _seen = frozenset()
-    if isinstance(kenntnis_lexikon, dict):
-        lex_entries = list(kenntnis_lexikon.values())
-    else:
-        lex_entries = list(kenntnis_lexikon)
-    for lex_entry in lex_entries:
-        if number < lex_entry.minimum or number > lex_entry.maximum:
-            continue
-        if lex_entry.dimension() == 0:
-            if round(lex_entry.mapping[-1]) == round(number):
-                return (lex_entry.root, lex_entry.root, _fmt_coeff(lex_entry.mapping[-1]))
-            continue
-        if lex_entry.key in _seen:
-            continue
-        result = _explain_combo_search(number, lex_entry, kenntnis_lexikon, _depth, _seen | {lex_entry.key})
-        if result is not None:
-            return result
+    cache = _gen_cache(kenntnis_lexikon)
+    # Gleiche Reihenfolge wie grammar_generate, damit Wort und Baum zusammenpassen.
+    for stufe in (True, False):
+        for lex_key, lex_entry in cache['sortiert']:
+            plan = _gen_plan(lex_entry, stufe, cache)
+            if plan is None:
+                continue
+            if plan[0] == 'atom':
+                if plan[1] == round(number):
+                    return (plan[2], plan[2], _fmt_coeff(lex_entry.mapping[-1]))
+                continue
+            if lex_entry.key in _seen:
+                continue
+            suffix_min, suffix_max = plan[4], plan[5]
+            if number < suffix_min[0] - 0.5 or number > suffix_max[0] + 0.5:
+                continue
+            result = _explain_rec(number, lex_entry, plan, 0, 0.0, '', [], [],
+                                  kenntnis_lexikon, _depth, _seen | {lex_entry.key})
+            if result is not None:
+                return result
     return None
 
 
-def _explain_combo_search(target, lex_entry, lex, depth, seen):
-    ir = lex_entry.inputrange
-    mapping = lex_entry.mapping
-    rootparts = lex_entry.root.split('_')
-    dim = len(ir)
-    suffix_min = [0.0] * (dim + 1)
-    suffix_max = [0.0] * (dim + 1)
-    suffix_min[dim] = mapping[-1]
-    suffix_max[dim] = mapping[-1]
-    for j in range(dim - 1, -1, -1):
-        comp_lo = min(to_scf(e).minimum for e in ir[j])
-        comp_hi = max(to_scf(e).maximum for e in ir[j])
-        if mapping[j] >= 0:
-            suffix_min[j] = suffix_min[j+1] + mapping[j] * comp_lo
-            suffix_max[j] = suffix_max[j+1] + mapping[j] * comp_hi
-        else:
-            suffix_min[j] = suffix_min[j+1] + mapping[j] * comp_hi
-            suffix_max[j] = suffix_max[j+1] + mapping[j] * comp_lo
-    return _explain_rec(target, lex_entry, ir, mapping, rootparts, 0, 0.0, '',
-                        [], [], suffix_min, suffix_max, lex, depth, seen)
-
-
-def _explain_rec(target, lex_entry, ir, mapping, rootparts, comp_idx, acc,
-                 word_so_far, tree_children, val_children,
-                 suffix_min, suffix_max, lex, depth, seen):
-    if comp_idx == len(ir):
+def _explain_rec(target, lex_entry, plan, comp_idx, acc, word_so_far,
+                 tree_children, val_children, lex, depth, seen):
+    _, rootparts, mapping, komponenten, suffix_min, suffix_max = plan
+    if comp_idx == len(komponenten):
         if round(acc + mapping[-1]) == round(target):
             word = word_so_far + rootparts[-1]
             tree = lex_entry.root + '(' + ','.join(tree_children) + ')'
@@ -1792,13 +2007,11 @@ def _explain_rec(target, lex_entry, ir, mapping, rootparts, comp_idx, acc,
                 parts.append('(' + vc + ')*' + _fmt_coeff(mapping[i]))
             return (word, tree, '+'.join(parts))
         return None
-    for entry in ir[comp_idx]:
-        for (ew, ev) in _iter_entry_words(entry, only_confirmed=False):
-            new_acc = acc + mapping[comp_idx] * ev
-            total_min = new_acc + suffix_min[comp_idx + 1]
-            total_max = new_acc + suffix_max[comp_idx + 1]
-            if target < total_min - 0.5 or target > total_max + 0.5:
-                continue
+    koeff = mapping[comp_idx]
+    obere = target + 0.5 - acc - suffix_min[comp_idx + 1]
+    untere = target - 0.5 - acc - suffix_max[comp_idx + 1]
+    for _werte, sortierte_werte in komponenten[comp_idx]:
+        for ev, ew in _kandidaten(sortierte_werte, koeff, untere, obere):
             child = explain_generate(ev, lex, _depth=depth + 1, _seen=seen)
             if child is None or child[0] != ew:
                 child_tree, child_val = ew, _fmt_coeff(ev)
@@ -1806,11 +2019,10 @@ def _explain_rec(target, lex_entry, ir, mapping, rootparts, comp_idx, acc,
                 _, child_tree, child_val = child
             tree_children.append(child_tree)
             val_children.append(child_val)
-            res = _explain_rec(target, lex_entry, ir, mapping, rootparts,
-                               comp_idx + 1, new_acc,
+            res = _explain_rec(target, lex_entry, plan, comp_idx + 1,
+                               acc + koeff * ev,
                                word_so_far + rootparts[comp_idx] + ew,
-                               tree_children, val_children,
-                               suffix_min, suffix_max, lex, depth, seen)
+                               tree_children, val_children, lex, depth, seen)
             if res is not None:
                 return res
             tree_children.pop()
@@ -1991,7 +2203,7 @@ def solve_lexicon_clashes(entry1, entry2, printb=True):
 
     io1 = [([round(i) for i in inp], round(sum([inp[i]*entry1.mapping[i] for i in range(entry1.dimension())]) + entry1.mapping[-1])) for inp in cartesian_product(entry1.number_inputs())]
     io2 = [([round(i) for i in inp], round(sum([inp[i]*entry2.mapping[i] for i in range(entry2.dimension())]) + entry2.mapping[-1])) for inp in cartesian_product(entry2.number_inputs())]
-    
+
     # entry1
     new_inputrange = []
     for comp in range(entry1.dimension()):
@@ -2094,9 +2306,12 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
     orakel_errors = []
     minimum = 1
     known_numbers = set()  # Cache: Zahlen, die das Lexikon bereits generieren kann
-    # One-step UNDO: snapshot taken just before each accepted word is processed.
-    _undo_kenntnis_lexikon = None  # None = no undo available yet
-    _undo_minimum = 1
+    # Vollständige Lernhistorie (nur hybrid2/hybrid3): ein Eintrag pro verarbeitetem
+    # Wort, mit dem Lexikon-Snapshot von UNMITTELBAR DAVOR. Erlaubt beliebig viele
+    # UNDO-Schritte hintereinander sowie das Korrigieren länger zurückliegender
+    # Eingaben (CORRECT), da für jede Zahl ihr ursprünglicher Zeitpunkt bekannt ist.
+    _history = []
+    _replay_queue = []  # (zahl, wort)-Paare, die nach einer CORRECT-Korrektur automatisch nachgeholt werden
 
     # Pre-sort oracle keys for fast scanning (allwissend mode)
     if orakel.style == 'allwissend':
@@ -2104,8 +2319,9 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
 
     # Alg. 2, Z. 4
     for voc in wortliste:
-        
+
         überschriebene_keys = []
+        _ist_replay = False  # True, wenn dieses Wort automatisch nach einer Korrektur wiederholt wird
 
         # Alg. 2, Z. 5
         if orakel.style in ['manual','hybrid']:
@@ -2136,43 +2352,93 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
             if not found:
                 break
         elif orakel.style in ['hybrid2', 'hybrid3']:
-            while True:
-                _input_fn = _hybrid2_input_func if _hybrid2_input_func is not None else input
-                antwort = _input_fn("Vokabel (Format Zahl Wort, z.B. 1 eins): ")
-                if antwort == 'STOP':
-                    raise StopLearning()
-                elif antwort == 'UNDO':
-                    if _undo_kenntnis_lexikon is not None:
-                        # Restore lexicon to state BEFORE the last processed word.
-                        kenntnis_lexikon = dict(_undo_kenntnis_lexikon)
+            if _replay_queue:
+                # Wort, das nach einer Korrektur automatisch wiederholt wird --
+                # keine Eingabe abfragen, einfach als nächstes verarbeiten.
+                zahl, wort = _replay_queue.pop(0)
+                voc = Vocabulary(zahl, wort)
+                _history.append({'snapshot': dict(kenntnis_lexikon), 'minimum': minimum, 'voc': voc})
+                minimum = zahl + 1
+                _ist_replay = True
+                if printb: print(f'[Automatische Wiederholung: {zahl} {wort}]')
+            else:
+                while True:
+                    _input_fn = _hybrid2_input_func if _hybrid2_input_func is not None else input
+                    antwort = _input_fn("Vokabel (Format Zahl Wort, z.B. 1 eins): ")
+                    if antwort == 'STOP':
+                        raise StopLearning()
+                    elif antwort == 'UNDO':
+                        if _history:
+                            # Beliebig oft hintereinander nutzbar: jeder Aufruf geht
+                            # genau einen Schritt in der vollständigen Historie zurück.
+                            letzter = _history.pop()
+                            kenntnis_lexikon = dict(letzter['snapshot'])
+                            globals()['kenntnis_lexikon'] = kenntnis_lexikon
+                            for _uk in kenntnis_lexikon:
+                                if isinstance(kenntnis_lexikon[_uk], SCFunction):
+                                    kenntnis_lexikon[_uk].kenntnis_lexikon = kenntnis_lexikon
+                            minimum = letzter['minimum']
+                            print("[Undo: '" + letzter['voc'].word + "' (" + str(letzter['voc'].number) +
+                                  ") rückgängig gemacht -- noch " + str(len(_history)) + ' Schritt(e) verfügbar]')
+                        else:
+                            print('[Kein Undo-Schritt verfügbar]')
+                        continue
+                    elif antwort.startswith('CORRECT '):
+                        # Korrigiert ein früher gelerntes Wort: Lexikon auf den Stand
+                        # unmittelbar VOR dieser Eingabe zurücksetzen, das Wort ersetzen
+                        # und danach automatisch alle seither gelernten Wörter erneut
+                        # verarbeiten (via _replay_queue, mit Pause zwischen den Schritten).
+                        teile = antwort.split(' ', 2)
+                        try:
+                            ziel_zahl = int(teile[1].strip())
+                            neues_wort = teile[2].strip().lower()
+                        except (IndexError, ValueError):
+                            print('Ungültiges Korrektur-Format.')
+                            continue
+                        if not neues_wort:
+                            print('Bitte ein Wort nach der Zahl angeben.')
+                            continue
+                        ziel_idx = None
+                        for idx in range(len(_history) - 1, -1, -1):
+                            if _history[idx]['voc'].number == ziel_zahl:
+                                ziel_idx = idx
+                                break
+                        if ziel_idx is None:
+                            print('[Korrektur nicht möglich: ' + str(ziel_zahl) + ' wurde noch nicht gelernt]')
+                            continue
+                        eintrag = _history[ziel_idx]
+                        kenntnis_lexikon = dict(eintrag['snapshot'])
                         globals()['kenntnis_lexikon'] = kenntnis_lexikon
                         for _uk in kenntnis_lexikon:
                             if isinstance(kenntnis_lexikon[_uk], SCFunction):
                                 kenntnis_lexikon[_uk].kenntnis_lexikon = kenntnis_lexikon
-                        minimum = _undo_minimum
-                        _undo_kenntnis_lexikon = None  # single-step undo: clear after use
-                        print('[Undo: letztes Wort rückgängig gemacht]')
+                        minimum = eintrag['minimum']
+                        _replay_queue = [(h['voc'].number, h['voc'].word) for h in _history[ziel_idx + 1:]]
+                        del _history[ziel_idx:]
+                        voc = Vocabulary(ziel_zahl, neues_wort)
+                        _history.append({'snapshot': dict(kenntnis_lexikon), 'minimum': minimum, 'voc': voc})
+                        minimum = ziel_zahl + 1
+                        if printb:
+                            print('[Korrektur: ' + str(ziel_zahl) + " = '" + neues_wort + "' -- " +
+                                  str(len(_replay_queue)) + ' nachfolgende Wörter werden automatisch neu verarbeitet]')
+                        break
+                    elif ' ' in antwort:
+                        teile = antwort.split(' ', 1)
+                        try:
+                            zahl = int(teile[0].strip())
+                            wort = teile[1].strip().lower()
+                            if wort:
+                                # Save snapshot BEFORE this word is processed.
+                                voc = Vocabulary(zahl, wort)
+                                _history.append({'snapshot': dict(kenntnis_lexikon), 'minimum': minimum, 'voc': voc})
+                                minimum = zahl + 1
+                                break
+                            else:
+                                print('Bitte geben Sie ein Wort nach der Zahl ein.')
+                        except ValueError:
+                            print('Ungültige Eingabe. Format: Zahl Wort, z.B. 1 eins')
                     else:
-                        print('[Kein Undo-Schritt verfügbar]')
-                    continue
-                elif ' ' in antwort:
-                    teile = antwort.split(' ', 1)
-                    try:
-                        zahl = int(teile[0].strip())
-                        wort = teile[1].strip().lower()
-                        if wort:
-                            # Save snapshot BEFORE this word is processed.
-                            _undo_kenntnis_lexikon = dict(kenntnis_lexikon)
-                            _undo_minimum = minimum
-                            voc = Vocabulary(zahl, wort)
-                            minimum = zahl + 1
-                            break
-                        else:
-                            print('Bitte geben Sie ein Wort nach der Zahl ein.')
-                    except ValueError:
                         print('Ungültige Eingabe. Format: Zahl Wort, z.B. 1 eins')
-                else:
-                    print('Ungültige Eingabe. Format: Zahl Wort, z.B. 1 eins')
 
         # Alg. 2, Z. 6 update statistical orakel based on data of new confirmed word
         if orakel.style in ['statistic','hybrid','hybrid2']:
@@ -2388,6 +2654,11 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
                     known_numbers.add(round(voc.mapping[-1]))
 
             #print(kenntnis_lexikon.keys())
+
+        # Pause nach jedem automatisch (durch eine Korrektur) wiederholten Wort,
+        # damit der Lernfortschritt in der GUI sichtbar mitverfolgt werden kann.
+        if _ist_replay:
+            time.sleep(1)
 
     #if printb: print('Learned '+str(len(wortliste))+' words and structured them in '+str(len(kenntnis_lexikon))+' functions.')
     #if printb: print('It took '+str(samples)+' samples to learn those.')
