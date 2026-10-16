@@ -7,17 +7,15 @@ import threading
 import queue
 import sys
 import os
-import ast
 import json
 import time
 import random
 import requests
-import numpy as np
 
 import funktionen_mit_referenzen as fmr
 from funktionen_mit_referenzen import (
     Oracle, learn_lexicon, grammar_generate, grammar_parse, explain_generate,
-    StopLearning, UndoLearning, Vocabulary
+    StopLearning, UndoLearning
 )
 import grammatik_ausgabe
 
@@ -93,6 +91,8 @@ _oracle_style = 'hybrid3'   # default: no internet
 
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
+AUTOFILL_GERMAN = '--autofill-german' in sys.argv  # python numeral_learner_app.py --autofill-german
+
 COLS = 10
 N_MAX = 999
 
@@ -159,6 +159,8 @@ class ZahlwortGUI:
         self._korrektur_schutz = set()  # numbers kept in _user_submitted during an active correction+replay
 
         self._build_ui()
+        if AUTOFILL_GERMAN:
+            self._auto_fill_start()  # automatisch 1-9 auf Deutsch vorlegen
         self._check_cycle()     # start periodic update loop
 
     # ── layout ──────────────────────────────────────────────────────────────
@@ -536,12 +538,35 @@ class ZahlwortGUI:
         self._korrektur_schutz = set(self._user_submitted)
         _input_queue.put(f"CORRECT {number} {wort}")
 
-    def _send_stop(self):
-        if messagebox.askyesno("STOP", "Lernen wirklich beenden?", parent=self.root):
-            if _waiting_event.is_set():
-                _input_queue.put("STOP")
-            else:
-                _input_queue.put("STOP")  # will be picked up on next wait
+    def _auto_fill_start(self):
+        """Legt die Zahlen 1-9 automatisch auf Deutsch vor, ohne Bedienereingabe.
+
+        Reicht die Wörter einzeln ein, immer erst wenn der Algorithmus tatsächlich
+        auf die nächste Eingabe wartet (genau die Bedingung, die auch _on_click
+        prüft) -- also exakt so, als würde der Bediener die Zellen 1-9 nacheinander
+        anklicken. Dadurch bleibt u.a. UNDO nutzbar: learn_lexicon nimmt seinen
+        Ein-Schritt-Undo-Schnappschuss jeweils unmittelbar vor der Verarbeitung
+        eines Worts auf, genau wie bei manueller Eingabe.
+        """
+        self._auto_fill_pending = [
+            (1, 'eins'), (2, 'zwei'), (3, 'drei'), (4, 'vier'), (5, 'fünf'),
+            (6, 'sechs'), (7, 'sieben'), (8, 'acht'), (9, 'neun'),
+        ]
+        self._auto_fill_tick()
+
+    def _auto_fill_tick(self):
+        if not self._auto_fill_pending:
+            return
+        if not _waiting_event.is_set():
+            self.root.after(20, self._auto_fill_tick)
+            return
+        # Bewusst vor dem Einreichen löschen: so lässt sich das erneute Setzen
+        # durch _gui_input_func eindeutig als "dieses Wort ist fertig verarbeitet"
+        # erkennen, statt versehentlich einen alten Zustand zu lesen.
+        _waiting_event.clear()
+        number, wort = self._auto_fill_pending.pop(0)
+        self._submit_word(number, wort)
+        self.root.after(20, self._auto_fill_tick)
 
     def _send_undo(self):
         if _waiting_event.is_set():

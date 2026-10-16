@@ -1,20 +1,12 @@
 import numpy as np
-from num2words import num2words
 import itertools
 import bisect
-from itertools import combinations
-from itertools import permutations
-from sympy import Matrix
 from diophantine import solve
-import pandas as pd
-from alphabet_detector import AlphabetDetector
 import types
 import matplotlib.pyplot as plt
 import random
 import os
 import time
-
-import unicodedata
 
 class StopLearning(Exception):
     pass
@@ -39,8 +31,6 @@ class Highlight:
         return self.start+len(self.numeral)
     def hlrange(self):
         return range(self.start+1,self.end())
-    def voc(self):
-        return Vocabulary(self.number,self.numeral,key=self.key)
     
 def to_scf(eingabe, kenntnis_lexikon=None):
     lexikon = kenntnis_lexikon
@@ -128,7 +118,7 @@ class SCFunction:
                 entry = component[0]
                 if type(entry) is SCFunction and entry.dimension() > 0:
                     print('WARNING: singleton component domain contains a non-atomic SCFunction.')
-                    entry.present 
+                    entry.present()
                     print('in')                         
                     print(root)
                     print('This is rarely supposed to occur rightfully.')
@@ -155,10 +145,6 @@ class SCFunction:
             except:
                 pass
             raise TypeError("Mapping has to be a list of "+str(dimension)+"+1 coefficients")
-        #for coeff in mapping:
-            #if not type(coeff) is int and not type(coeff) is float:
-                #print(type(coeff))
-                #raise TypeError("All coefficients of the mapping have to be integers or floats")
 
         if c == []:
             c = i
@@ -206,28 +192,21 @@ class SCFunction:
         maxi = self.mapping[-1]
         mini = self.mapping[-1]
         conf_maxi = self.mapping[-1]
-        conf_mini = self.mapping[-1]
-        conf_max_input = 0
         max_input = 0
         for i in range(len(self.mapping)-1):
-            conf_max_input = max(conf_max_input, max(to_scf(e, kenntnis_lexikon=kenntnis_lexikon).maximum for e in self.confirmed_inputrange[i]))
             max_input = max(max_input, max(to_scf(e, kenntnis_lexikon=kenntnis_lexikon).maximum for e in self.inputrange[i]))
             if self.mapping[i] >= 0:
                 maxi += self.mapping[i] * max([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).maximum for e in self.inputrange[i]])
                 mini += self.mapping[i] * min([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).minimum for e in self.inputrange[i]])
                 conf_maxi += self.mapping[i] * max([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).maximum for e in self.confirmed_inputrange[i]])
-                conf_mini += self.mapping[i] * min([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).minimum for e in self.confirmed_inputrange[i]])
             else:
                 maxi += self.mapping[i] * min([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).minimum for e in self.inputrange[i]])
                 mini += self.mapping[i] * max([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).maximum for e in self.inputrange[i]])
                 conf_maxi += self.mapping[i] * min([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).minimum for e in self.confirmed_inputrange[i]])
-                conf_mini += self.mapping[i] * max([to_scf(e, kenntnis_lexikon=kenntnis_lexikon).maximum for e in self.confirmed_inputrange[i]])
         self.maximum = round(maxi)
         self.minimum = round(mini)
         self.confirmed_maximum = round(conf_maxi)
-        self.confirmed_minimum = round(conf_mini)
         self.maximal_input = round(max_input)
-        self.confirmed_maximal_input = round(conf_max_input)
 
         if key is None:
             key_ending = ['']+list(range(100))
@@ -288,20 +267,14 @@ class SCFunction:
         return ni
     def input_numberbase(self):
         build_base=[]
-        #print(len(self.inputrange))
         base_complete = False
         number_of_variable_input_slots = len([comp for comp in range(self.dimension()) if len(self.inputrange[comp]) > 1])
         for root_inputx in cartesian_product(self.confirmed_inputrange):
             for final_inputx in cartesian_product([to_scf(entr).all_outputs() for entr in root_inputx]):
-                #print(build_base)
-                #print([component.number for component in final_inputx]+[1])
                 #if not inputx in span(build_base): # matrank(buildbase+inputx)=len(Buildbase)+1
                 if np.linalg.matrix_rank(np.array(build_base+[[to_scf(component).mapping[-1] for component in final_inputx]+[1]], dtype=np.float64),tol=None)==len(build_base)+1:
-                    #print(str(self.insert(inputx).number)+' is linear independent')
                     build_base=build_base+[[to_scf(component).mapping[-1] for component in final_inputx]+[1]]
-                    #print([self.insert(inputx).number])
                 if len(build_base) == number_of_variable_input_slots + 1:
-                    #print('base complete')
                     base_complete = True
                     break
             if base_complete:
@@ -331,12 +304,6 @@ class SCFunction:
             if not type(component) is Vocabulary and not type(component) is SCFunction:
                 print(type(component))
                 raise TypeError('All components of the input have to be a Vocabulary or an SCFunction')
-                
-        # trouble shoot if input is not in the inputrange
-        for entry in range(len(inputx)):
-            if inputx[entry].root not in [to_scf(inputfunction).root for inputfunction in self.inputrange[entry]]:
-                #print("Input "+str([inp.root for inp in inputx])+" is not in the input range of "+str(self.root))
-                break
                 
         # initialize root, inputrange and mapping of composed SCF
         rootparts = self.root.split('_')
@@ -468,7 +435,6 @@ class SCFunction:
         return all final SCFunctions (vocabulary) without unsatisfied '_'s left, that are derivable from 
         component_ignores: list of lists, one ignore-list per component (per-component cycle prevention).
         '''
-        #print('alloutputs of '+self.root)
         if self.dimension() == 0:
             return [SCFunction(self.root, [], [round(self.mapping[0])], key=self.key, kenntnis_lexikon=self.kenntnis_lexikon)]
         else:
@@ -628,19 +594,15 @@ class SCFunction:
         merge_lex = self.kenntnis_lexikon if isinstance(self.kenntnis_lexikon, dict) else (mergee.kenntnis_lexikon if hasattr(mergee, 'kenntnis_lexikon') and isinstance(mergee.kenntnis_lexikon, dict) else globals().get('kenntnis_lexikon', None))
     
         # Behandle Errore
-        for me in [mergee]+other_mergees:
-            if type(other_mergees) != list:
-                raise TypeError("Function multi_mergable requires a non-empty list of mergees")
-            if not type(mergee) is SCFunction:
-                print('not scf')
-                raise TypeError("Can only merge with other SCFunctions") 
-            if any(len(mergee.inputrange[comp])>1 for comp in range(self.dimension())):
-                print('Mergee is not singleton')
-                mergee.present()
-                raise BaseException('Merge of SCFunctions is yet only implemented for mergees directly produced by proto_parse')
-            #if self.dimension() == 0:
-                #print('merger is not generalizable')
-                #raise BaseException('SCFunction ' + self.root + ' of dimension 0 cannot merge')
+        if type(other_mergees) != list:
+            raise TypeError("Function multi_mergable requires a non-empty list of mergees")
+        if not type(mergee) is SCFunction:
+            print('not scf')
+            raise TypeError("Can only merge with other SCFunctions") 
+        if any(len(mergee.inputrange[comp])>1 for comp in range(self.dimension())):
+            print('Mergee is not singleton')
+            mergee.present()
+            raise BaseException('Merge of SCFunctions is yet only implemented for mergees directly produced by proto_parse')
 
         if printb:   
             print('Vereinige die folgenden Funktionen:')
@@ -654,10 +616,7 @@ class SCFunction:
 
         # 11 Prüfe ob u bereits im affinen Spann des Definitionsbereichs von self liegt
         affine_basis = self.input_numberbase() # affine Basis des Defbereichs von self
-        #print('affine_basis:', affine_basis)
-        #print(np.array(affine_basis + [[m.mapping[-1] for m in mergee_inputvector] + [1]], dtype=float))
         if np.linalg.matrix_rank(np.array(affine_basis + [[m.mapping[-1] for m in mergee_inputvector] + [1]], dtype=float), tol=1e-3) == len(affine_basis):
-            #print('mergee lies in affine span of inputrange of merger')
             if trust_affinity:
 
                 #12 - 13
@@ -681,12 +640,9 @@ class SCFunction:
 
         # [W_2,W_3,...] =
         other_mergee_inputvectors = [[to_scf(me.inputrange[i][0]) for i in range(mergee.dimension())] for me in other_mergees] # W_2,W_3,...
-        #print('other_mergee_inputvectors:', other_mergee_inputvectors)
 
         # 16 neue_dimension = l 
         neue_dimension = len([comp for comp in range(self.dimension()) if len(self.inputrange[comp]) > 1 or not set(mergee.inputrange[comp] + [omi[comp] for omi in other_mergee_inputvectors]).issubset(self.inputrange[comp])]) # l
-        #print('neue_dimension',neue_dimension)
-        #print('affine_basis',len(affine_basis))
 
         # 18 - 20
         # Konstruiere ersten Teil von \vec{y}
@@ -704,7 +660,6 @@ class SCFunction:
 
                 # 21
                 koeffizienten = intlinsolve([b[:-1] for b in neue_affine_basis],bildwerte_erweitert)
-                #print(koeffizienten)
 
                 # 22 - 31
                 neuer_definitionsbereich = [self.inputrange[comp] + mergee.inputrange[comp] + [me[comp] for me in other_vektoren] for comp in range(self.dimension())]
@@ -775,14 +730,7 @@ class SCFunction:
                 print(retstr)
             return retstr
     
-    def max_schatzung(self):
-        return round(sum(max([m,0]) for m in self.mapping) * max([2] + self.mapping[:-1]))
 
-    def min_schatzung(self):
-        if all(m>=0 for m in self.mapping):
-            return round(sum(self.mapping))
-        else:
-            return round(sum([max([m,0]) for m in self.mapping])/2)
 
     def verstarke(self,lexikon,orakel,avoid_any_clash=False,printb=True):
         kenntnis_lexikon = self.kenntnis_lexikon if isinstance(self.kenntnis_lexikon, dict) else lexikon
@@ -799,7 +747,6 @@ class SCFunction:
             for entry in self.confirmed_inputrange[comp]:
                 if to_scf(entry, kenntnis_lexikon=kenntnis_lexikon).confirmed_maximum > upper_limit:
                     upper_limit = to_scf(entry, kenntnis_lexikon=kenntnis_lexikon).confirmed_maximum
-        #if printb: print('upper_limit: ',upper_limit)
         
         # 12 verstarkter_definitionsbereich = \mathcal{G}
         for key in lexikon.keys():
@@ -846,7 +793,6 @@ class SCFunction:
                             if parsed_number != -1 and round(parsed_number) == round(entw.mapping[-1]):
                                 klarer_fall = True
                                 verstarkter_definitionsbereich[comp] += [candidate]
-                                #if printb: print('Input '+to_scf(candidate).root+' added to input slot '+str(comp)+' of '+self.root)
                             elif parsed_number != -1 or grammar_generate(round(entw.mapping[-1]), kenntnis_lexikon, only_confirmed=True) != '':
                                 klarer_fall = True
                             elif avoid_any_clash and grammar_generate(round(entw.mapping[-1]), kenntnis_lexikon, only_confirmed=False) != '':
@@ -854,7 +800,6 @@ class SCFunction:
                             if klarer_fall:
                                 break
                             entwurfe += [entw]
-                        #print(entwurfe)
 
                         if not klarer_fall:
 
@@ -865,7 +810,6 @@ class SCFunction:
 
                                 # 23
                                 verstarkter_definitionsbereich[comp] += [candidate]
-                                #if printb: print('Input '+to_scf(candidate).root+' added to input slot '+str(comp)+' of '+self.root)
             
         verstarkte_funktion = SCFunction(self.root,verstarkter_definitionsbereich,self.mapping,self.confirmed_inputrange,key=self.key, kenntnis_lexikon=kenntnis_lexikon)
         
@@ -875,11 +819,6 @@ class SCFunction:
 
 class Vocabulary(SCFunction):
     def __init__(self, nb, nal, key=None):
-        if type(nb) is list or type(nb) is np.array:
-            try:
-                nb=nb.item()
-            except:
-                pass
         if not type(nal) is str:
             raise TypeError("Numeral has to be a string")
         self.number = nb
@@ -895,10 +834,7 @@ class Vocabulary(SCFunction):
         # For compatibility with SCFunction logic
         self.minimum = nb
         self.maximum = nb
-        self.confirmed_minimum = nb
         self.confirmed_maximum = nb
-    def printVoc(self):
-        print(str(self.number)+' '+self.word)
     def all_outputs(self, only_confirmed = False):
         return [self]
     def dimension(self):
@@ -996,7 +932,7 @@ class Oracle:
             print(f"Mittlerer Zahlwert (value):  {value:.4f}")
             print(f"Suchergebnisse pro Entwurf:  {sr_list}")
             print(f"Mittlere Suchergebnisse:     {search_results:.2f}")
-            print(f"--- Berechnung von expected ---")
+            print("--- Berechnung von expected ---")
             print(f"  Regressionsparameter: a = {a:.6f}, b = {b:.6f}")
             print(f"  expected = exp(a) * value^b = exp({a:.6f}) * {value:.4f}^{b:.6f}")
             print(f"           = {np.exp(a):.6f} * {value**b:.6f}")
@@ -1127,10 +1063,6 @@ class Oracle:
             else:
                 copy = Oracle('manual')
                 return copy.answer(proposal)
-            
-        elif self.style == 'arithmetic' or self.style == 'dummy' or self.style == 'hybrid3':
-            #Since the code only make s arithmetically plausible proposals, everything is excepted
-            return True
             
     def answer(self,proposal, tol = 0,show_plot=True):
         if self.style == 'statistic':
@@ -1275,34 +1207,22 @@ def _to_native(val):
         return float(val)
 
 def intlinsolve(base,image):
-    #print('base: ',base)
-    #print('image: ',image)
     try:
         solution = list(solve(base,image)[0])
-        #print('solution is ',solution)
         return [_to_native(s) for s in solution]+[0]
     except IndexError:
-        #print('constant needed')
         erweiterte_basis = [list(b)+[1] for b in base]
-        #print(erweiterte_basis)
-        #print(image)
         try:
             return [_to_native(s) for s in solve(erweiterte_basis,image)[0]]
         except NotImplementedError:
-            #print('unique solution')
-            #return [round(i) for i in np.dot(np.linalg.pinv(np.array([b+[1] for b in base], dtype=np.float64),rcond=1e-15),image)]
             return [float(i) for i in np.dot(np.linalg.pinv(np.array(erweiterte_basis, dtype=np.float64)),image)]
         except IndexError:
-            #print('unique solution')
-            #return [round(i) for i in np.dot(np.linalg.pinv(np.array([b+[1] for b in base], dtype=np.float64),rcond=1e-15),image)]
             return [float(i) for i in np.dot(np.linalg.pinv(np.array(erweiterte_basis, dtype=np.float64)),image)]
     except NotImplementedError:
-        #print('unique solution')
         return [round(float(i)) for i in np.dot(np.linalg.pinv(np.array(base, dtype=np.float64)),image)]+[0]
 
 def cartesian_product(listlist):
     if len(listlist)==0:
-        #print('ERROR: empty input in product')
         return [[]]
     for liste in listlist:
         if not isinstance(liste,list):
@@ -1313,171 +1233,24 @@ def cartesian_product(listlist):
     return cp
 
 
-def delatinized(string):
-    #print(string)
-    ad = AlphabetDetector()
-    if not ad.is_latin(string):
-        if not ad.is_cyrillic(string):
-            if ad.is_cyrillic(string[0]) and not ad.is_cyrillic(string[-1]):
-                #print('first part is cyrillic')
-                for point in range(len(string)):
-                    if not ad.is_cyrillic(string[:point]):
-                        return string[:point-2]
-            elif not ad.is_cyrillic(string[0]) and ad.is_cyrillic(string[-1]):
-                #print('last part is cyrillic')
-                for point in reversed(range(len(string))):
-                    if not ad.is_cyrillic(string[point:]):
-                        return string[point+2:]
-            elif ad.is_latin(string[0]):
-                #print('first part is latin')
-                for point in range(len(string)+1):
-                    if not ad.is_latin(string[:point]):
-                        return string[point-1:] 
-            elif ad.is_latin(string[-1]):
-                #print('last part is latin')
-                for point in reversed(range(len(string)+1)):
-                    if not ad.is_latin(string[point:]):
-                        return string[:point+1]
-            else:
-                return string
-        else:
-            return string
-    else:
-        return string
   
-def create_lexicon(language,set_limit=10**9,lower_limit=0,exclude_ambiguous_numerals=True):
-    if exclude_ambiguous_numerals:
-        if language == 'Dogrib':
-            set_limit = min([90, set_limit])
-        elif language == 'Makhuwa':
-            set_limit = min([600, set_limit])
-        elif language == 'Purepecha':
-            set_limit = min([130, set_limit])
-        elif language == 'Susu':
-            set_limit = min([200, set_limit])
-        elif language == 'Tunica':
-            set_limit = min([200, set_limit])
-        elif language == 'Yao':
-            set_limit = min([600, set_limit])
-        elif language == 'Yupik':
-            set_limit = min([500, set_limit])
-        elif language == 'tr':
-            set_limit = min([11000, set_limit])
-        elif language == 'Haida':
-            # not ambiguous but wrong (80-89 hold wrong words)
-            set_limit = min([80, set_limit])
-    LEX=[]
-    try:
-        num2words(1, lang=language)
-        for integer in range(lower_limit, set_limit): #list(range(1,1001))+[1002,1006,1100,1200,1206,7000,7002,7006,7100,7200,7206,10000,17000,17200,17206,20000,27000,27006,27200,27206]:
-            if integer < set_limit and lower_limit < integer:
-                try:
-                    numeral=num2words(integer, lang=language)
-                    voc=Vocabulary(integer,numeral)
-                    LEX=LEX+[voc]
-                except:
-                    pass
-        return LEX
-    except:
-        try:
-            #lanu=pd.read_csv(r'C:\Users\ikm\OneDrive\Desktop\NumeralParsingPerformance\Languages&NumbersData\Numeral.csv', encoding = "utf_16", sep = '\t')
-            lanu=pd.read_csv(r'Numeral.csv', encoding = "utf_16", sep = '\t')
-            df=lanu[lanu['Language']==language]
-            biscriptual=False
-            if ' ' in df.iloc[0,2]:
-                biscriptual=True
-            for i in range(len(df)):
-                if i+1 < set_limit:
-                    numeral=df.iloc[i,2]
-                    if numeral[0]==' ':
-                        numeral=numeral[1:]
-                    if numeral[-1]==' ':
-                        numeral=numeral[:-1]
-                    if language in ['Latin','Persian','Arabic']:
-                        words=numeral.split(' ')
-                        numeral=' '.join(iter(words[:-1]))
-                    if language in ['Chuvash','Adyghe','Belarusian','Ukrainian','Ingush']:
-                        words=numeral.split(' ')
-                        numeral=' '.join(iter(words[:len(words)//2]))
-                    # For biscriptual languages: extract native script (not Latin transliteration)
-                    elif biscriptual and not language in ['Latin','Persian','Arabic','Chuvash','Adyghe']:
-                        ad = AlphabetDetector()
-                        # Check if Latin comes first (like Japanese) or second (like Armenian, Russian)
-                        first_is_latin = False
-                        for char in numeral:
-                            if char != ' ':
-                                first_is_latin = ad.is_latin(char)
-                                break
-                        
-                        if first_is_latin:
-                            # Latin first, native script second (e.g., Japanese "ichi 一")
-                            # Find first non-Latin, non-space character and take from there
-                            for point in range(len(numeral)):
-                                if numeral[point] != ' ' and not ad.is_latin(numeral[point]):
-                                    numeral = numeral[point:].strip()
-                                    break
-                        else:
-                            # Native script first, Latin second (e.g., Armenian "մեկ mek")
-                            # Find first Latin character and take everything before it
-                            for point in range(len(numeral)+1):
-                                char = numeral[point:point+1]
-                                if char and ad.is_latin(char) and char != ' ':
-                                    numeral = numeral[:point].strip()
-                                    break
-                        
-                        # Fallback to old delatinized approach if extraction didn't work
-                        if numeral == df.iloc[i,2].strip() or not numeral:
-                            numeral=delatinized(df.iloc[i,2].strip())
-                    #print(numeral)
-                    numeral=numeral.replace('%',',')
-                    #print(numeral)
-                    voc=Vocabulary(i+1,numeral)
-                    LEX=LEX+[voc]
-            return LEX
-        except:
-            #pass
-            if True:
-                lanu=pd.read_csv(r'DVNum.csv', encoding = "utf_8", sep = ';')
-                #print(lanu)
-                #print(lanu.columns)
-                df=lanu[lanu['Language']==language]
-                for i in range(len(df)):
-                    if i+1 < set_limit:
-                        numeral=df.iloc[i,2]
-                        if numeral[0]==' ':
-                            numeral=numeral[1:]
-                        if numeral[-1]==' ':
-                            numeral=numeral[:-1]
-                        voc=Vocabulary(i+1,unicodedata.normalize('NFC',numeral))
-                        LEX=LEX+[voc]
-                for voc in LEX:
-                    pass
-                    #voc.printVoc()
-                    #print(len(voc.word))
-                return LEX
-            #except:
-                #raise NotImplementedError("Language "+language+" is not supported or spelled differently")  
+
+def vokabeln_von(kenntnis_lexikon):
+    # das Lexikon (dict oder Liste) als Liste von Vocabulary: SCFunctions werden durch alle ihre Ausgaben ersetzt
+    if not isinstance(kenntnis_lexikon, dict) and len(kenntnis_lexikon) != 0 and isinstance(kenntnis_lexikon[0],Vocabulary):
+        return kenntnis_lexikon
+    eintraege = kenntnis_lexikon.values() if isinstance(kenntnis_lexikon, dict) else kenntnis_lexikon
+    vokabeln = []
+    for entry in eintraege:
+        if isinstance(entry,Vocabulary):
+            vokabeln += [entry]
+        else:
+            vokabeln += entry.all_outputs_as_voc()
+    return vokabeln
 
 def proto_parse(number,numeral,kenntnis_lexikon,print_documentation,print_result): #parse a (int number,str numeral)-pair using (current) kenntnis_lexikon. boolean print_documentation toggles documentation printout. boolean print_result toggles result printout
-    #print('parse '+numeral)
     if print_documentation: print('parse '+numeral+' '+str(number))
-    lex1 = []
-    if isinstance(kenntnis_lexikon, dict):
-        for key in kenntnis_lexikon.keys():
-            entry = kenntnis_lexikon[key]
-            if isinstance(entry,Vocabulary):
-                lex1 += [entry]
-            else:
-                lex1 += entry.all_outputs_as_voc()
-    elif len(kenntnis_lexikon) != 0 and isinstance(kenntnis_lexikon[0],Vocabulary):
-        lex1 = kenntnis_lexikon
-    else:
-        for entry in kenntnis_lexikon:
-            if isinstance(entry,Vocabulary):
-                lex1 += [entry]
-            else: 
-                lex1 += entry.all_outputs_as_voc()
-    lex1=lex1+[Vocabulary(number,numeral)] # so the new word itself is found at the end
+    lex1=vokabeln_von(kenntnis_lexikon)+[Vocabulary(number,numeral)] # so the new word itself is found at the end
     checkpoint=0 # point from which parsing is finally performed already
     highlights=[] #list of highlights, initially empty
     for end in range(len(numeral)+1): #set end of the observed substring
@@ -1494,7 +1267,6 @@ def proto_parse(number,numeral,kenntnis_lexikon,print_documentation,print_result
                     subnum_found_at_this_end=True
                     if 2*entry.number<number: #highlighting condition
                         if print_documentation: print(substring+' <' + str(entry.number) + '/2')
-                        #highlights=[highlight for highlight in highlights if not highlight.start>=start]# if a highlight is contained in new highlight, then remove it from list of highlights
                         for highlight in highlights[:]: #browse through present highlights
                             if highlight.start>=start: # if a highlight is contained in new highlight,...
                                 if print_documentation: print("remove "+highlight.numeral)
@@ -1513,31 +1285,13 @@ def proto_parse(number,numeral,kenntnis_lexikon,print_documentation,print_result
         root=root[0:highlight.start]+'_'+root[highlight.end():len(root)]
     decompstr=str(number)+'='+root+'('
     decompstr=decompstr+','.join([str(highlight.number) for highlight in highlights])
-    #for highlight in highlights:
-    #    decompstr=decompstr+str(highlight.number)+','
     decompstr=decompstr+')'
     if print_result: print(decompstr)
     return SCFunction(root,[[Vocabulary(highlight.number,highlight.numeral,key=highlight.key)] for highlight in highlights],[0 for highlight in highlights]+[number], kenntnis_lexikon=kenntnis_lexikon)
 
 def advanced_parse(number, word, kenntnis_lexikon, print_doc, print_result):
     if print_doc: print('parse '+word+' '+str(number))
-    lexicon1 = []
-    if isinstance(kenntnis_lexikon, dict):
-        for key in kenntnis_lexikon.keys():
-            entry = kenntnis_lexikon[key]
-            if isinstance(entry,Vocabulary):
-                lexicon1 += [entry]
-            else:
-                lexicon1 += entry.all_outputs_as_voc()
-    elif len(kenntnis_lexikon) != 0 and isinstance(kenntnis_lexikon[0],Vocabulary):
-        lexicon1 = kenntnis_lexikon
-    else:
-        for entry in kenntnis_lexikon:
-            if isinstance(entry,Vocabulary):
-                lexicon1 += [entry]
-            else: 
-                lexicon1 += entry.all_outputs_as_voc()
-    lexicon1 = lexicon1+[Vocabulary(number,word)]    
+    lexicon1 = vokabeln_von(kenntnis_lexikon)+[Vocabulary(number,word)]    
     checkpoint = 0
     highlights=[]
     mult_found=False
@@ -1545,9 +1299,7 @@ def advanced_parse(number, word, kenntnis_lexikon, print_doc, print_result):
         startrange=set(range(checkpoint, end))
         for highlight in highlights:
             startrange=startrange-set(highlight.hlrange())
-            #print('remove '+str(range(highlight[3]+1,len(highlight[0]))))
         startrange=sorted(list(startrange))
-        #print('startrange='+str(startrange))
         for start in startrange:
             subnum_found_at_this_end=False
             substr=word[start:end]
@@ -1584,12 +1336,6 @@ def advanced_parse(number, word, kenntnis_lexikon, print_doc, print_result):
                                             if potential_highlight:
                                                 print("Ignore " + potential_highlight.word + " because " + word[laterstart:end] + " is its subnumeral.")
                                         subentry_found=True
-                                        #for highlight in reversed(highlights):
-                                            #if highlight.end() > laterstart:
-                                                #if print_doc: print("remove "+highlight[0])
-                                                #highlights.remove(highlight)
-                                        #highlights=highlights+[Highlight(Vocabulary(subentry.number,subentry.word),laterstart)]
-                                        #checkpoint = laterstart
                                         potential_highlight = Highlight(subentry,laterstart)
                                         potential_checkpoint = laterstart
                                         if print_doc: print('Unpacked: ',[highlight.numeral for highlight in highlights])
@@ -1621,7 +1367,6 @@ def advanced_parse(number, word, kenntnis_lexikon, print_doc, print_result):
                     break                    
             if subnum_found_at_this_end:
                 break
-    #print('Unpacked subnums: ',len(highlights))
     if len(highlights) == 2:
         if highlights[0].number + highlights[1].number == number:
             sohi = sorted(highlights, key=lambda highlight: highlight.number)
@@ -1636,9 +1381,7 @@ def advanced_parse(number, word, kenntnis_lexikon, print_doc, print_result):
     elif len(highlights) == 3:
         sohi = sorted(highlights, key=lambda highlight: highlight.number)
         suspected_mult = sohi[-1]
-        #print('suspected mult: ', suspected_mult.root)
         if suspected_mult.number**2 > number:
-            #other_numbers = [highlight.number for highlight in highlights if highlight != suspected_mult]
             other_numbers = [highlight for highlight in highlights if highlight != suspected_mult]
             if other_numbers[0].number * suspected_mult.number + other_numbers[1].number == number:
                 if print_doc: print("remove "+suspected_mult.root+ " because " + other_numbers[0].root + " * " + suspected_mult.root + " + " + other_numbers[1].root + " = " + word + " and " + suspected_mult.root + " > " + other_numbers[0].root + " so it is probably mult.")
@@ -1657,7 +1400,6 @@ def advanced_parse(number, word, kenntnis_lexikon, print_doc, print_result):
                     highlights.remove(suspected_mult)
                     break
         
-    #print(str(highlights)+wort+' '+str(zahl))
     root=word
     for highlight in reversed(highlights):
         root=root[0:highlight.start]+'_'+root[highlight.end():len(root)]
@@ -2072,225 +1814,93 @@ def _finde_eingaben_rekursiv(funktion, zielwert, comp_idx, akkumulator, suffix_m
                 return [eintrag] + ergebnis
     return None
 
-#%run numeral_decomposition_advanced.ipynb
-def random_choice(my_dict):
-    keys = list(my_dict.keys())
-    weights = np.array(list(my_dict.values()), dtype=float)
-    weights /= weights.sum()   # normalisieren zu Wahrscheinlichkeiten
-    chosen = np.random.choice(keys, p=weights)
-    return chosen
 
-def shuffle_lexicon(lexicon):
-    if not type(lexicon) == list:
-        raise TypeError('Input lexicon must be of type list')
-    #for entry in lexicon:
-        #if not type(entry) in [__main__.Vocabulary, __main__.SCFunction]:
-            #raise TypeError('All entries of the lexicon must be of type Vocabulary of SCFunction. The following entry ist not:' + str(entry))
-    total_weight = sum([entry.number**(-2) if entry.number!=0 else 1 for entry in lexicon])
-    numdict = {entry.number: entry.word for entry in lexicon}
-    rounddict = {}
-    for entry in lexicon:
-        n = entry.number
-        if n >= 1000:
-            power = 10 ** int(np.log10(n))
-            rounded = (n // power) * power
-            rounddict[n] = rounded if rounded in numdict else n
-        else:
-            rounddict[n] = n
-            length_of_rounded_word = len(entry.word)
-            for nb in range(n // 2, 2 * n):
-                if nb in numdict.keys() and numdict[nb] in entry.word and len(numdict[nb]) < length_of_rounded_word:
-                    rounddict[n] = nb
-                    length_of_rounded_word = len(numdict[nb])
-    rounding_probability = 0.61
-    freqdict = {
-        entry.number: (1 - rounding_probability if entry.number == 0 else (1 - rounding_probability) * entry.number**(-2))
-        for entry in lexicon
-    }
-    for nb in rounddict:
-        if nb == 0:
-            freqdict[rounddict[nb]] += rounding_probability
-        else:
-            freqdict[rounddict[nb]] += rounding_probability * nb**(-2)
+def _ein_ausgaben(entry, only_confirmed=False):
+    # alle (Eingabewerte, Ausgabewert)-Paare von entry
+    return [([round(i) for i in inp], round(sum([inp[i]*entry.mapping[i] for i in range(entry.dimension())]) + entry.mapping[-1])) for inp in cartesian_product(entry.number_inputs(only_confirmed = only_confirmed))]
 
-    keys = list(freqdict.keys())
-    weights = np.array(list(freqdict.values()), dtype=float)
-    weights /= weights.sum()
-    # Efraimidis-Spirakis weighted sampling without replacement: O(n log n)
-    # Use log form for numerical stability: log(u^(1/w)) = log(u)/w
-    u = np.random.uniform(size=len(keys))
-    log_sort_keys = np.log(u + 1e-300) / weights
-    order = np.argsort(-log_sort_keys)
+def _verzichte_auf_konflikte_mit_bestaetigtem(entry, cio_other, other, printb=True):
+    # entry verzichtet auf unbestätigte Eingaben, deren Ausgaben mit bestätigten Werten von other kollidieren.
+    # Gibt das neue entry und für jede behaltene unbestätigte Eingabe ihre (Eingabe, Ausgabe)-Paare zurück.
+    entwurfe = {}
+    new_inputrange = []
+    for comp in range(entry.dimension()):
+        entwurfe[comp] = {}
+        new_comp = []
+        for entr in entry.inputrange[comp]:
+            if entr in entry.confirmed_inputrange[comp] or len(entry.inputrange[comp]) == 1:
+                new_comp += [entr]
+            else:
+                eingabekombinationen = []
+                for c in range(entry.dimension()):
+                    if c == comp:
+                        eingabekombinationen += [[ou.mapping[-1] for ou in to_scf(entr).sample_outputs(only_confirmed=False)]]
+                    else:
+                        kombinationskomponente = []
+                        for e in entry.confirmed_inputrange[c]:
+                            kombinationskomponente += [ou.mapping[-1] for ou in to_scf(e).sample_outputs(only_confirmed=True)]
+                        eingabekombinationen += [kombinationskomponente]
+                eingabe_io = []
+                for eingabe in cartesian_product(eingabekombinationen):
+                    eingabe_io += [[eingabe, round(sum([entry.mapping[i]*eingabe[i] for i in range(entry.dimension())]) + entry.mapping[-1])]]
+                if any(e[1] == i[1] for e in eingabe_io for i in cio_other):
+                    if printb: print(entry.root + ' does not use the input ' + to_scf(entr).root + ' in component ' + str(comp) + ' because it clashes with confirmed value of ' + other.root)
+                else:
+                    new_comp += [entr]
+                    entwurfe[comp][to_key(entr)] = eingabe_io
+        new_inputrange += [new_comp]
+    return SCFunction(entry.root, new_inputrange, entry.mapping, c=entry.confirmed_inputrange, key=entry.key), entwurfe
 
-    # Reuse existing Vocabulary objects instead of creating new ones
-    entry_by_number = {entry.number: entry for entry in lexicon}
-    shuffled_lexicon = [entry_by_number[int(keys[i])] for i in order]
-    #for e in shuffled_lexicon:
-        #e.printVoc()
-    return shuffled_lexicon
-
+def _entscheide_konflikte(entry, entwurfe, io_other, other):
+    # Kollidiert eine unbestätigte Eingabe von entry mit Ausgaben von other, gewinnt die Seite,
+    # deren unbestätigte Eingabewerte kleiner sind. entry behält die Eingabe, wenn es nicht öfter verliert als gewinnt.
+    confirmed_nums = [set(round(x) for x in comp) for comp in entry.number_inputs(only_confirmed = True)]
+    confirmed_nums_other = [set(round(x) for x in comp) for comp in other.number_inputs(only_confirmed = True)]
+    new_inputrange = []
+    for comp in range(entry.dimension()):
+        new_comp = []
+        for entr in entry.inputrange[comp]:
+            if entr in entry.confirmed_inputrange[comp] or len(entry.inputrange[comp]) == 1:
+                new_comp += [entr]
+            else:
+                eingabe_io = entwurfe[comp][to_key(entr)]
+                clash_wins = 0
+                clash_losses = 0
+                break_now = False
+                for v in io_other:
+                    for e in eingabe_io:
+                        if round(v[1]) == round(e[1]):
+                            unconfirmed_components = [e[0][i] for i in range(len(e[0])) if round(e[0][i]) not in confirmed_nums[i]]
+                            unconfirmed_components_other = [v[0][i] for i in range(len(v[0])) if round(v[0][i]) not in confirmed_nums_other[i]]
+                            if sum(unconfirmed_components_other) < sum(unconfirmed_components):
+                                clash_losses += 1
+                            elif sum(unconfirmed_components_other) > sum(unconfirmed_components):
+                                clash_wins += 1
+                        if abs(clash_wins - clash_losses) > 3:
+                            break_now = True
+                            break
+                    if break_now:
+                        break
+                if clash_wins >= clash_losses:
+                    new_comp += [entr]
+        new_inputrange += [new_comp]
+    return SCFunction(entry.root, new_inputrange, entry.mapping, c=entry.confirmed_inputrange, key=entry.key)
 
 def solve_lexicon_clashes(entry1, entry2, printb=True):
     if printb: print('Solving lexicon clashes between ' + entry1.root + ' and ' + entry2.root + '...')
-    #if printb: entry1.present()
-    #if printb: entry2.present()
-    cio1 = [[[round(i) for i in inp], round(sum([inp[i]*entry1.mapping[i] for i in range(entry1.dimension())]) + entry1.mapping[-1])] for inp in cartesian_product(entry1.number_inputs(only_confirmed = True))]
-    cio2 = [[[round(i) for i in inp], round(sum([inp[i]*entry2.mapping[i] for i in range(entry2.dimension())]) + entry2.mapping[-1])] for inp in cartesian_product(entry2.number_inputs(only_confirmed = True))]
-    #print('cio1: ', cio1)
-    #print('cio2: ', cio2)
-    entwurfe1 = {}
-    entwurfe1[entry1.key] = {}
-    new_inputrange = []
-    for comp in range(entry1.dimension()):
-        entwurfe1[entry1.key][comp] = {}
-        new_comp = []
-        for entr in entry1.inputrange[comp]:
-            if entr in entry1.confirmed_inputrange[comp] or len(entry1.inputrange[comp]) == 1:
-                new_comp += [entr]
-            else:
-                eingabekombinationen = []
-                for c in range(entry1.dimension()):
-                    if c == comp:
-                        eingabekombinationen += [[ou.mapping[-1] for ou in to_scf(entr).sample_outputs(only_confirmed=False)]]
-                    else:
-                        kombinationskomponente = []
-                        for e in entry1.confirmed_inputrange[c]:
-                            kombinationskomponente += [ou.mapping[-1] for ou in to_scf(e).sample_outputs(only_confirmed=True)]
-                        eingabekombinationen += [kombinationskomponente]
-                eingabe_io = []
-                for eingabe in cartesian_product(eingabekombinationen):
-                    eingabe_io += [[eingabe, round(sum([entry1.mapping[i]*eingabe[i] for i in range(entry1.dimension())]) + entry1.mapping[-1])]]
-                if any(e[1] == i[1] for e in eingabe_io for i in cio2):
-                    if printb: print(entry1.root + ' does not use the input ' + to_scf(entr).root + ' in component ' + str(comp) + ' because it clashes with confirmed value of ' + entry1.root)
-                else:
-                    new_comp += [entr]
-                    entwurfe1[entry1.key][comp][to_key(entr)] = eingabe_io
-        new_inputrange += [new_comp]
-    entry1 = SCFunction(entry1.root, new_inputrange, entry1.mapping, c=entry1.confirmed_inputrange, key=entry1.key)
+    cio1 = _ein_ausgaben(entry1, only_confirmed=True)
+    cio2 = _ein_ausgaben(entry2, only_confirmed=True)
+    entry1, entwurfe1 = _verzichte_auf_konflikte_mit_bestaetigtem(entry1, cio2, entry2, printb)
+    entry2, entwurfe2 = _verzichte_auf_konflikte_mit_bestaetigtem(entry2, cio1, entry1, printb)
 
-    entwurfe2 = {}
-    entwurfe2[entry2.key] = {}
-    new_inputrange = []
-    for comp in range(entry2.dimension()):
-        entwurfe2[entry2.key][comp] = {}
-        new_comp = []
-        for entr in entry2.inputrange[comp]:
-            if entr in entry2.confirmed_inputrange[comp] or len(entry2.inputrange[comp]) == 1:
-                new_comp += [entr]
-            else:
-                eingabekombinationen = []
-                for c in range(entry2.dimension()):
-                    if c == comp:
-                        eingabekombinationen += [[ou.mapping[-1] for ou in to_scf(entr).sample_outputs(only_confirmed=False)]]
-                    else:
-                        kombinationskomponente = []
-                        for e in entry2.confirmed_inputrange[c]:
-                            kombinationskomponente += [ou.mapping[-1] for ou in to_scf(e).sample_outputs(only_confirmed=True)]
-                        eingabekombinationen += [kombinationskomponente]
-                eingabe_io = []
-                for eingabe in cartesian_product(eingabekombinationen):
-                    eingabe_io += [[eingabe, round(sum([entry2.mapping[i]*eingabe[i] for i in range(entry2.dimension())]) + entry2.mapping[-1])]]
-                if any(e[1] == i[1] for e in eingabe_io for i in cio1):
-                    if printb: print(entry2.root + ' does not use the input ' + to_scf(entr).root + ' in component ' + str(comp) + ' because it clashes with confirmed value of ' + entry1.root)
-                else:
-                    new_comp += [entr]
-                    entwurfe2[entry2.key][comp][to_key(entr)] = eingabe_io
-        new_inputrange += [new_comp]
-    entry2 = SCFunction(entry2.root, new_inputrange, entry2.mapping, c=entry2.confirmed_inputrange, key=entry2.key)
-    #print('After removing inputs that clash with confirmed values of the other entry:')
-    #entry1.present()
-    #entry2.present()
-
-    io1 = [([round(i) for i in inp], round(sum([inp[i]*entry1.mapping[i] for i in range(entry1.dimension())]) + entry1.mapping[-1])) for inp in cartesian_product(entry1.number_inputs())]
-    io2 = [([round(i) for i in inp], round(sum([inp[i]*entry2.mapping[i] for i in range(entry2.dimension())]) + entry2.mapping[-1])) for inp in cartesian_product(entry2.number_inputs())]
-
-    # entry1
-    new_inputrange = []
-    for comp in range(entry1.dimension()):
-        new_comp = []
-        for entr in entry1.inputrange[comp]:
-            if entr in entry1.confirmed_inputrange[comp] or len(entry1.inputrange[comp]) == 1:
-                new_comp += [entr]
-            else:
-                eingabe_io = entwurfe1[entry1.key][comp][to_key(entr)]
-                clash_wins = 0
-                clash_losses = 0
-                break_now = False
-                for v in io2:
-                    for e in eingabe_io:
-                        if round(v[1]) == round(e[1]):
-                            input1 = e[0]
-                            input2 = v[0]
-                            confirmed_nums1 = [set(round(x) for x in comp) for comp in entry1.number_inputs(only_confirmed = True)]
-                            confirmed_nums2 = [set(round(x) for x in comp) for comp in entry2.number_inputs(only_confirmed = True)]
-                            unconfirmed_components1 = [input1[i] for i in range(len(input1)) if round(input1[i]) not in confirmed_nums1[i]]
-                            unconfirmed_components2 = [input2[i] for i in range(len(input2)) if round(input2[i]) not in confirmed_nums2[i]]
-                            if sum(unconfirmed_components2) < sum(unconfirmed_components1):
-                                clash_losses += 1
-                            elif sum(unconfirmed_components2) > sum(unconfirmed_components1):
-                                clash_wins += 1
-                            elif sum(unconfirmed_components2) == sum(unconfirmed_components1):
-                                pass
-                        if abs(clash_wins - clash_losses) > 3:
-                            break_now = True
-                            break
-                    if break_now:
-                        break
-                if clash_wins >= clash_losses:
-                    #if printb: print(entry1.root + ' keeps the input ' + to_scf(entr).root + ' in component ' + str(comp) + ' despite clashes against entries of ' + entry2.root + '. (wins=' + str(clash_wins) + ' losses=' + str(clash_losses) + ')')
-                    new_comp += [entr]
-                else:
-                    pass
-                    #if printb: print(entry1.root + ' does not use the input ' + to_scf(entr).root + ' in component ' + str(comp) + ' because it loses clash against ' + entry2.root + '. (wins=' + str(clash_wins) + ' losses=' + str(clash_losses) + ')')
-        new_inputrange += [new_comp]
-    entry1 = SCFunction(entry1.root, new_inputrange, entry1.mapping, c=entry1.confirmed_inputrange, key=entry1.key)
-
-    # entry2
-    new_inputrange = []
-    for comp in range(entry2.dimension()):
-        new_comp = []
-        for entr in entry2.inputrange[comp]:
-            if entr in entry2.confirmed_inputrange[comp] or len(entry2.inputrange[comp]) == 1:
-                new_comp += [entr]
-            else:
-                eingabe_io = entwurfe2[entry2.key][comp][to_key(entr)]
-                clash_wins = 0
-                clash_losses = 0
-                break_now = False
-                for v in io1:
-                    for e in eingabe_io:
-                        if round(v[1]) == round(e[1]):
-                            input2 = e[0]
-                            input1 = v[0]
-                            confirmed_nums2 = [set(round(x) for x in comp) for comp in entry2.number_inputs(only_confirmed = True)]
-                            confirmed_nums1 = [set(round(x) for x in comp) for comp in entry1.number_inputs(only_confirmed = True)]
-                            unconfirmed_components2 = [input2[i] for i in range(len(input2)) if round(input2[i]) not in confirmed_nums2[i]]
-                            unconfirmed_components1 = [input1[i] for i in range(len(input1)) if round(input1[i]) not in confirmed_nums1[i]]
-                            if sum(unconfirmed_components1) < sum(unconfirmed_components2):
-                                clash_losses += 1
-                            elif sum(unconfirmed_components1) > sum(unconfirmed_components2):
-                                clash_wins += 1
-                            elif sum(unconfirmed_components1) == sum(unconfirmed_components2):
-                                pass
-                        if abs(clash_wins - clash_losses) > 3:
-                            break_now = True
-                            break
-                    if break_now:
-                        break
-                if clash_wins >= clash_losses:
-                    #if printb: print(entry2.root + ' keeps the input ' + to_scf(entr).root + ' in component ' + str(comp) + ' despite clashes against entries of ' + entry1.root + '.')
-                    new_comp += [entr]
-                else:
-                    pass
-                    #if printb: print(entry2.root + ' does not use the input ' + to_scf(entr).root + ' in component ' + str(comp) + ' because it loses clash against ' + entry1.root + '.')
-        new_inputrange += [new_comp]
-    entry2 = SCFunction(entry2.root, new_inputrange, entry2.mapping, c=entry2.confirmed_inputrange, key=entry2.key)
+    io1 = _ein_ausgaben(entry1)
+    io2 = _ein_ausgaben(entry2)
+    entry1 = _entscheide_konflikte(entry1, entwurfe1, io2, entry2)
+    entry2 = _entscheide_konflikte(entry2, entwurfe2, io1, entry1)
     return entry1, entry2
 
 
 def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash=False,version='a',printb=True,normalize=True,restricted_merge=True):
-    #if printb: print('Learning '+language)
-    #supervisor = wortliste
 
     # Alg. 2, Z. 3
     kenntnis_lexikon = initial_kenntnis_lexikon if initial_kenntnis_lexikon is not None else {}
@@ -2302,7 +1912,6 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
                 kenntnis_lexikon[key].kenntnis_lexikon = kenntnis_lexikon
 
     # some tracking variables for efficiency or analysis
-    samples = 0
     orakel_errors = []
     minimum = 1
     known_numbers = set()  # Cache: Zahlen, die das Lexikon bereits generieren kann
@@ -2467,9 +2076,7 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
                             print("ORAKEL ERROR: " + str(voc.mapping[-1]) + " apparently means " + voc.word + " and not " + o.word)
                             orakel_errors += [voc.mapping[-1]]
                         
-            samples += 1
             #1 parse new word
-            #if printb: print('What means '+str(voc.number)+'?')
             if printb: print('Orakel: '+voc.word+' means '+str(voc.number))
 
             # Alg. 2, Z. 7-8 parse = F^*
@@ -2555,15 +2162,10 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
             # Alg. 2, Z. 26-29 reinforce kenntnis_lexikon with gelernte_funktion
             for key in kenntnis_lexikon.keys():
                 if kenntnis_lexikon[key].dimension() > 0: # sum(kenntnis_lexikon[key].mapping) > sum(gelernte_funktion.mapping) and
-                    #if printb: print('Attempting to reinforce ' + kenntnis_lexikon[key].root + ' with ' + gelernte_funktion.root)
                     new_entry = kenntnis_lexikon[key].verstarke({gelernte_funktion.key: gelernte_funktion},orakel,avoid_any_clash=avoid_any_clash,printb=printb)
                     if any([len(new_entry.inputrange[j]) > len(kenntnis_lexikon[key].inputrange[j]) for j in range(new_entry.dimension())]):
                         kenntnis_lexikon[key] = new_entry
                         updated_keys += [new_entry.key]
-                #else:
-                    #new_entry = kenntnis_lexikon[i]
-                #kenntnis_lexikon[i] = new_entry
-                #if printb: entry.present()
 
             # Alg. 2, Z. 30-34 resolve lexicon clashes
             if orakel.style in ['arithmetic','hybrid2','hybrid3']:
@@ -2585,7 +2187,6 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
                         e_min = kenntnis_lexikon[key].minimum
                         e_max = kenntnis_lexikon[key].maximum
                         if ue_min <= e_max and ue_max >= e_min:
-                            #print('Resolving clashes between ' + kenntnis_lexikon[key].root + ' and ' + kenntnis_lexikon[ue_key].root)
                             kenntnis_lexikon[key], kenntnis_lexikon[ue_key] = solve_lexicon_clashes(kenntnis_lexikon[key],kenntnis_lexikon[ue_key],printb=printb)
             
             # Alg. 2, Z. 28 überschreibe keys von überflüssigen einträgen im kenntnis_lexikon
@@ -2605,13 +2206,6 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
                             all_covered = False
                             break
                     if all_covered:
-                        #if printb:
-                            #print('Überschreibe:')
-                            #print(key,end=': ')
-                            #kenntnis_lexikon[key].present()
-                            #print('mit')
-                            #print(ue,end=': ')
-                            #kenntnis_lexikon[ue].present()
                         # Erweitere confirmed_inputrange der überdeckenden Funktion
                         überdeckende = kenntnis_lexikon[ue]
                         if überdeckende.dimension() > 0:
@@ -2626,13 +2220,7 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
                         kenntnis_lexikon[key] = kenntnis_lexikon[ue]
                         überschriebene_keys.append(key)
             # 26, 31, 35 add learned to kenntnis_lexikon
-            #kenntnis_lexikon += updated_entries                
             
-            #print()
-            #print('Entries: ')
-            #for entry in kenntnis_lexikon.values():
-                #if printb: entry.present()
-            #print()
             
             #reorganize all inputranges so that they only contain scfunctions, no vocabulary
             if normalize:
@@ -2653,15 +2241,12 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
                     # Just memorized a new word — add its number directly
                     known_numbers.add(round(voc.mapping[-1]))
 
-            #print(kenntnis_lexikon.keys())
 
         # Pause nach jedem automatisch (durch eine Korrektur) wiederholten Wort,
         # damit der Lernfortschritt in der GUI sichtbar mitverfolgt werden kann.
         if _ist_replay:
             time.sleep(1)
 
-    #if printb: print('Learned '+str(len(wortliste))+' words and structured them in '+str(len(kenntnis_lexikon))+' functions.')
-    #if printb: print('It took '+str(samples)+' samples to learn those.')
     if printb and orakel.style == 'statistic': print(str(len(orakel_errors)) + ' orakel errors occurred. They affected the numbers ' + ', '.join(orakel_errors) + '.')
     if printb: print('Those are:')
     for key in kenntnis_lexikon.keys():
@@ -2669,34 +2254,12 @@ def learn_lexicon(wortliste,orakel,initial_kenntnis_lexikon=None,avoid_any_clash
         if printb: 
             print(key + ': ',end='')
             entry.present()
-            #print('Confirmed form: ',end='')
-            #entry.present(only_confirmed=True)
     if printb: print('')
     return kenntnis_lexikon
 
-def validate(kenntnis_lexikon, oracle):
-    learned_words = []
-    for key in kenntnis_lexikon.keys():
-        e = kenntnis_lexikon[key]
-        learned_words += [ou.root for ou in e.all_outputs()]
-    mistake_found = False
-    for ou in learned_words:
-        if ou not in oracle:
-            mistake_found = True
-            print(ou, ' is wrong')
-    for ou in oracle:
-        if ou not in learned_words:
-            mistake_found = True
-            print(ou, ' is missing')
-    if not mistake_found:
-        print('No mistakes')
-
 
 def normalize_scf_lexicon(kenntnis_lexikon,überschriebene_keys, printb= True):
-    #for e in kenntnis_lexikon:
-        #e.present()
     neues_kenntnis_lexikon = {}
-    #print(überschriebene_keys)
 
     # Baue eine transitive Redirect-Map: A→B→C wird zu A→C
     redirect = {}
@@ -2712,7 +2275,6 @@ def normalize_scf_lexicon(kenntnis_lexikon,überschriebene_keys, printb= True):
 
     for key in kenntnis_lexikon.keys():
         eintrag = kenntnis_lexikon[key]
-        #if printb: eintrag.present()
         new_inputrange = []
         new_c_inputrange = []
         for comp in range(eintrag.dimension()):
@@ -2757,9 +2319,7 @@ def normalize_scf_lexicon(kenntnis_lexikon,überschriebene_keys, printb= True):
 
 def frage_nach_zahlwort(kenntnis_lexikon, minimum=1):
     while True:
-        #print('Find word for '+str(minimum))
         word = grammar_generate(minimum,kenntnis_lexikon)
-        #print(minimum,word)
         if word == '':
             while True:
                 antwort = input("Wie lautet das Zahlwort für " + str(minimum) + "? ")

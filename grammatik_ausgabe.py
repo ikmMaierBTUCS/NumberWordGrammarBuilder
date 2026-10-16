@@ -7,7 +7,7 @@ Herkunft
 --------
 scflist2cfg stammt aus These1Experiment/these5experiment.py, die komplette
 CFG->MG-Maschinerie (cfg2mg & Co.) aus These1Experiment/mg_konversion.py.
-Beide sind hier 1:1 uebernommen -- nur der Import zeigt auf das
+Beide sind hier 1:1 uebernommen (ohne ungenutzte Hilfsfunktionen) -- nur der Import zeigt auf das
 funktionen_mit_referenzen DIESES Projekts, weil scflist2cfg mit isinstance auf
 SCFunction prueft und to_scf sich ueber das modul-globale kenntnis_lexikon
 abstimmt. Mit dem Modul des anderen Projekts waeren das verschiedene Klassen.
@@ -488,10 +488,6 @@ def free(NT, CFG):
     return True
 
 
-def restricted(NT, CFG):
-    return not free(NT, CFG)
-
-
 def determine_partial_category_order(CFG):
     N = set([rule[0] for rule in CFG])
     category_order = partial_order([])
@@ -515,9 +511,6 @@ class partial_order:
             if r[0] == a and self.compare(r[1], b):
                 return True
         return False
-
-    def add_rule(self, rule):
-        self.relations.add(rule)
 
     def maximum(self, lst):
         max_element = None
